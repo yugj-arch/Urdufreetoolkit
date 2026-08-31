@@ -79,7 +79,7 @@ def _badge(p: BaseProvider, ok: bool) -> str:
     # api
     if not p.info.needs:
         return "free (net)"
-    return "needs key"
+    return "api" if ok else "needs key"
 
 
 def for_ui(capability: Capability | None = None) -> list[dict]:
