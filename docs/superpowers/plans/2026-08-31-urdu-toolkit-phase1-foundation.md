@@ -210,7 +210,9 @@ git commit -m "feat: provider base types (Capability, Result dataclasses, BasePr
     instance (a `BaseProvider` subclass with `.info`). Returns `{info.id: instance}`.
     A module that raises `ImportError` at import time is skipped silently (its lib
     isn't installed); any other exception is re-raised.
-  - `get(provider_id: str) -> BaseProvider` — raises `KeyError` if unknown.
+  - `get(capability: Capability, provider_id: str) -> BaseProvider` — raises `KeyError`
+    if unknown. Two-arg because the same `id` (e.g. `"gpt"`) legitimately exists for
+    more than one capability; the registry is keyed by `"<capability>:<id>"`.
   - `for_ui(capability: Capability | None = None) -> list[dict]` — each dict:
     `{"id","label","capability","kind","note","available":bool,"reason":str,"badge":str}`
     where `badge` is `"offline"` / `"needs key"` / `"free (net)"` / `"not installed"`
@@ -414,7 +416,7 @@ git commit -m "feat: provider registry with discovery, availability gate, UI met
 - Consumes: `providers.registry.get`, `providers.base` result types.
 - Produces:
   - `run(capability: Capability, provider_ids: list[str], call: Callable[[BaseProvider], Result], timeout_s: float = 60.0) -> list[Result]`
-    - resolves each id via `registry.get`; unknown id → a `Result(provider_id=id, ok=False, error="unknown provider")`.
+    - resolves each id via `registry.get(capability, id)`; unknown id → a `Result(provider_id=id, ok=False, error="unknown provider")`.
     - runs `call(provider)` for each in a `ThreadPoolExecutor(max_workers=max(1,len(ids)))`.
     - each future awaited with `timeout_s`; on `TimeoutError` →
       `Result(provider_id=id, ok=False, error=f"timed out after {timeout_s:.0f}s")`.
