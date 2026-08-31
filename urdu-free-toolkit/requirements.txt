@@ -1,4 +1,17 @@
+# ---------------------------------------------------------------------------
+# Phase 1 core — the app runs and every current test passes with just these.
+# ---------------------------------------------------------------------------
 Flask==3.0.3
-openai>=1.40.0
 python-dotenv==1.0.1
 Pillow==10.4.0
+openai>=1.40.0
+pytest>=8.0
+
+# ---------------------------------------------------------------------------
+# Later phases add their own heavy deps next to the providers that need them
+# (offline OCR: surya-ocr, easyocr, paddleocr, rapidocr-onnxruntime,
+# python-doctr, transformers, torch; transliteration: aksharamukha, uroman,
+# PyICU, ai4bharat-transliteration; translation: IndicTransToolkit,
+# argostranslate, deep-translator; render: opencv-python-headless,
+# simple-lama-inpainting, iopaint). See docs/superpowers/plans/.
+# ---------------------------------------------------------------------------

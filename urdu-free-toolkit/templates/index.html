@@ -1,276 +1,111 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Urdu → Hindi / Roman (AI)</title>
-<style>
-  /* No external fonts/CDNs -- system font stacks only. The OCR itself
-     runs through the OpenAI API (see ocr.py). */
-  :root{
-    --ink:#1c1f3d; --paper:#f3ecdc; --marigold:#b8801f; --vermilion:#bb4430;
-  }
-  *{box-sizing:border-box;}
-  body{ margin:0; background:var(--ink); color:var(--paper);
-        font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-        min-height:100vh; }
-  .wrap{ max-width:880px; margin:0 auto; padding:40px 20px 70px; }
-  header{ text-align:center; margin-bottom:30px; }
-  .badge{ font-family:monospace; font-size:12px; letter-spacing:.1em; text-transform:uppercase;
-          color:var(--marigold); margin-bottom:8px; }
-  h1{ font-size:clamp(28px,5vw,42px); margin:0 0 8px; }
-  .sub{ color:rgba(243,236,220,.65); font-size:14.5px; max-width:520px; margin:0 auto; line-height:1.5; }
-
-  .card{ background:var(--paper); color:var(--ink); border-radius:12px; padding:24px;
-         margin-top:20px; box-shadow:0 16px 40px -16px rgba(0,0,0,.5); }
-  .card h2{ font-size:18px; margin:0 0 4px; }
-  .hint{ font-size:13px; color:#5b5744; margin-bottom:14px; }
-
-  .tabs{ display:flex; gap:6px; margin-bottom:14px; }
-  .tab{ font-size:13px; font-weight:600; padding:7px 14px; border-radius:999px;
-        border:1.5px solid var(--ink); background:transparent; color:var(--ink); cursor:pointer; }
-  .tab.active{ background:var(--ink); color:var(--paper); }
-  .panel{ display:none; }
-  .panel.active{ display:block; }
-
-  .dropzone{ border:2px dashed rgba(28,31,61,.3); border-radius:8px; padding:24px; text-align:center; cursor:pointer; }
-  .dropzone:hover{ border-color:var(--vermilion); }
-  #preview{ max-width:100%; max-height:200px; border-radius:6px; margin-top:12px; display:none; }
-
-  select, textarea{ width:100%; font-size:14px; border:1.5px solid rgba(28,31,61,.25);
-                     border-radius:7px; padding:9px 11px; background:#fffdf8; color:var(--ink); }
-  textarea{ min-height:100px; line-height:1.7; resize:vertical; }
-  textarea[dir="rtl"]{ font-size:20px; }
-
-  .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:12px; }
-  button{ font-family:inherit; font-weight:600; font-size:13.5px; border:none; border-radius:7px;
-          padding:10px 18px; cursor:pointer; background:var(--vermilion); color:var(--paper); }
-  button:hover{ opacity:.9; }
-  button:disabled{ opacity:.5; cursor:not-allowed; }
-  button.secondary{ background:transparent; border:1.5px solid rgba(28,31,61,.25); color:var(--ink); }
-
-  .status{ margin-top:10px; font-family:monospace; font-size:12px; color:#5b5744; display:none; }
-  .status.show{ display:block; }
-
-  .output{ background:#fffdf8; border:1.5px solid rgba(28,31,61,.15); border-radius:8px;
-           padding:14px; margin-top:10px; font-size:17px; line-height:1.7; white-space:pre-wrap; }
-  .output.roman{ font-family:monospace; font-size:14.5px; }
-  .label{ font-family:monospace; font-size:11px; text-transform:uppercase; color:#8a836a; margin-bottom:6px; }
-
-  .low-conf{ background:rgba(187,68,48,.18); padding:1px 3px; border-radius:3px; }
-  .note{ font-size:12px; color:#8a836a; margin-top:10px; line-height:1.5; }
-  .hidden{ display:none; }
-  .mt-10{ margin-top:10px; }
-  .mt-14{ margin-top:14px; }
-  #editedImg{ max-width:100%; border-radius:6px; margin-top:10px; border:1.5px solid rgba(28,31,61,.15); display:block; }
-  .pick{ font-size:13px; display:flex; align-items:center; gap:5px; color:var(--ink); }
-  #downloadImg{ font-weight:600; font-size:13px; color:var(--vermilion); text-decoration:none; }
-  footer{ text-align:center; margin-top:32px; font-size:11.5px; color:rgba(243,236,220,.4); line-height:1.6; }
-</style>
+<title>Urdu Toolkit — compare engines</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
 <div class="wrap">
   <header>
-    <div class="badge">AI Powered · GPT-4o Vision</div>
-    <h1>Urdu → Hindi / Roman</h1>
-    <p class="sub">Transcribe Urdu text from images and transliterate it into Devanagari and Roman script using AI.</p>
+    <div class="badge">Free / offline first · pick your engines</div>
+    <h1>Urdu Toolkit</h1>
+    <p class="sub">Pull Urdu out of images, transliterate to Devanagari &amp; Roman, and
+      run several engines side by side to compare. Offline engines need no key; paid
+      APIs are optional extras.</p>
+    <button id="settings-btn" class="ghost" type="button">Settings</button>
   </header>
 
-  <div class="card">
-    <h2>1. Bring in Urdu text</h2>
-    <p class="hint">Upload an image or paste text directly.</p>
-    <div class="tabs">
-      <button type="button" class="tab active" data-tab="image">From image</button>
-      <button type="button" class="tab" data-tab="text">Paste text</button>
-    </div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="single" type="button">Single image</button>
+    <button class="tab" data-tab="text" type="button">Paste text</button>
+    <button class="tab" data-tab="batch" type="button" disabled>Batch (soon)</button>
+  </nav>
 
-    <div class="panel active" id="panel-image">
-      <div class="dropzone" id="dropzone">
-        <strong>Click to upload</strong> or drag &amp; drop — JPG/PNG
-        <img id="preview" alt="preview"/>
+  <section class="panel active" id="panel-single">
+    <div class="card">
+      <h2>1. OCR — image to Urdu text</h2>
+      <div class="engines" id="ocr-engines"><p class="dim">Loading engines…</p></div>
+      <div class="quick">
+        <button type="button" class="chip" data-pick="ocr:offline">All offline</button>
+        <button type="button" class="chip" data-pick="ocr:recommended">Recommended</button>
+        <button type="button" class="chip" data-pick="ocr:none">Clear</button>
       </div>
-      <input type="file" id="fileInput" accept="image/*" class="hidden">
-      <div class="row"><button id="extractBtn" disabled>Extract &amp; transliterate</button></div>
-      <div class="status" id="ocrStatus">Reading image with GPT-4o…</div>
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="file-input" accept="image/*" hidden>
+        <span id="drop-label"><strong>Click or drop</strong> an image (JPG / PNG)</span>
+        <img id="preview" alt="">
+      </label>
+      <button id="run-ocr" class="primary" type="button" disabled>Run OCR</button>
+      <div class="columns" id="ocr-columns"></div>
     </div>
+  </section>
 
-    <div class="panel" id="panel-text">
-      <textarea id="pasteBox" dir="rtl" placeholder="یہاں اردو لکھیں…"></textarea>
-      <div class="row"><button id="useTextBtn">Use this text</button></div>
+  <section class="panel" id="panel-text">
+    <div class="card">
+      <h2>Paste Urdu text</h2>
+      <textarea id="paste-box" dir="rtl" placeholder="یہاں اردو لکھیں…"></textarea>
+      <div class="row"><button id="use-paste" class="primary" type="button">Use this text</button></div>
     </div>
-  </div>
+  </section>
 
-  <div class="card hidden" id="editCard">
-    <h2>2. Check the Urdu text</h2>
-    <p class="hint" id="lowConfHint">The result is already below. Edit the Urdu here and re-run if anything was misread.</p>
-    <div id="confidencePreview" class="output hidden"></div>
-    <textarea id="urduInput" dir="rtl" class="mt-10"></textarea>
+  <div class="card" id="translit-card" hidden>
+    <h2>2. Transliterate — Urdu to Devanagari + Roman</h2>
+    <p class="dim">Edit the Urdu below if an OCR engine misread it, then pick transliteration engines.</p>
+    <textarea id="urdu-input" dir="rtl" placeholder="Urdu text lands here…"></textarea>
+    <div class="engines" id="translit-engines"></div>
+    <div class="quick">
+      <button type="button" class="chip" data-pick="translit:offline">All offline</button>
+      <button type="button" class="chip" data-pick="translit:recommended">Recommended</button>
+      <button type="button" class="chip" data-pick="translit:none">Clear</button>
+    </div>
     <div class="row">
-      <button id="transliterateBtn">Re-transliterate</button>
+      <label>Roman style
+        <select id="roman-style">
+          <option value="natural">Natural (mohabbat)</option>
+          <option value="iso">ISO 15919</option>
+          <option value="iast">IAST</option>
+        </select>
+      </label>
+      <button id="run-translit" class="primary" type="button">Run transliteration</button>
     </div>
-    <div class="status" id="transStatus">Transliterating with GPT-4o…</div>
+    <div class="columns" id="translit-columns"></div>
   </div>
 
-  <div class="card hidden" id="resultCard">
-    <h2>3. Result</h2>
-    <div class="label">Devanagari</div>
-    <div class="output" id="devaOut">—</div>
-    <div class="label mt-14">Roman</div>
-    <div class="output roman" id="romanOut">—</div>
-    <p class="note" id="modelNote">Generated by GPT-4o. Urdu script omits short vowels; the model restores them from sentence context, so uncommon words, proper nouns, and poetry can still be approximate — always check the extracted Urdu above.</p>
-
-    <div id="imgEditBlock" class="hidden mt-14">
-      <div class="label">Edited image — Urdu replaced in place</div>
-      <div class="row">
-        <label class="pick"><input type="radio" name="imgScript" value="roman" checked> Roman</label>
-        <label class="pick"><input type="radio" name="imgScript" value="devanagari"> Devanagari</label>
-        <button type="button" id="renderImgBtn" class="secondary">Generate edited image</button>
-      </div>
-      <div class="status" id="imgStatus">Re-rendering with gpt-image-1… this takes 30–90s.</div>
-      <img id="editedImg" class="hidden" alt="edited image"/>
-      <div class="row"><a id="downloadImg" class="hidden" download="urdu-transliterated.png">Download PNG</a></div>
-      <p class="note">gpt-image-1 erases the Urdu and repaints the transliteration in place, keeping the rest of the image. It's an AI re-render, not a pixel-exact patch — layout and colour match well, but fine details can shift and the typeface won't be the original's.</p>
+  <div class="card" id="render-card" hidden>
+    <h2>3. Redraw the image (optional)</h2>
+    <p class="dim">Erase the Urdu in the uploaded image and paint a transliteration where it was.
+      Run a transliteration first — the redraw uses that text.</p>
+    <div class="row">
+      <label>Engine <select id="render-provider"></select></label>
+      <label><input type="radio" name="render-script" value="roman" checked> Roman</label>
+      <label><input type="radio" name="render-script" value="devanagari"> Devanagari</label>
+      <button id="run-render" class="primary" type="button">Generate</button>
     </div>
+    <div id="render-status" class="dim" hidden></div>
+    <img id="rendered" alt="" hidden>
+    <a id="download-render" download="urdu-redrawn.png" hidden>Download PNG</a>
   </div>
 
-  <footer>Uploaded images and text are sent to the OpenAI API for processing.</footer>
+  <footer>Offline engines run entirely on this machine. API engines send your image or text to that provider.</footer>
 </div>
 
-<script>
-document.querySelectorAll('.tab').forEach(t=>{
-  t.addEventListener('click', ()=>{
-    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
-    t.classList.add('active');
-    document.getElementById('panel-'+t.dataset.tab).classList.add('active');
-  });
-});
+<div class="modal" id="settings-modal" hidden>
+  <div class="modal-body">
+    <h2>Settings — API keys</h2>
+    <p class="dim">Written to a local <code>.env</code> file next to the app. Offline
+      engines need none of these. A field showing “set” already has a value — leave it
+      blank to keep it, or type a new value to replace it.</p>
+    <div id="settings-fields"></div>
+    <div class="row">
+      <button id="save-settings" class="primary" type="button">Save</button>
+      <button id="close-settings" class="ghost" type="button">Close</button>
+    </div>
+    <div id="settings-status" class="dim"></div>
+  </div>
+</div>
 
-const dropzone = document.getElementById('dropzone');
-const fileInput = document.getElementById('fileInput');
-const preview = document.getElementById('preview');
-const extractBtn = document.getElementById('extractBtn');
-let selectedFile = null;
-
-dropzone.addEventListener('click', ()=> fileInput.click());
-dropzone.addEventListener('dragover', e=>{ e.preventDefault(); });
-dropzone.addEventListener('drop', e=>{
-  e.preventDefault();
-  if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
-});
-fileInput.addEventListener('change', e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); });
-
-function handleFile(file){
-  selectedFile = file;
-  const reader = new FileReader();
-  reader.onload = ()=>{ preview.src = reader.result; preview.style.display='block'; };
-  reader.readAsDataURL(file);
-  extractBtn.disabled = false;
-}
-
-const editCard = document.getElementById('editCard');
-const resultCard = document.getElementById('resultCard');
-
-function showNotes(text){
-  const box = document.getElementById('confidencePreview');
-  if(text){
-    box.style.display = 'block';
-    box.textContent = 'Model notes: ' + text;
-  } else {
-    box.style.display = 'none';
-  }
-}
-
-extractBtn.addEventListener('click', async ()=>{
-  if(!selectedFile) return;
-  extractBtn.disabled = true;
-  document.getElementById('ocrStatus').classList.add('show');
-  try{
-    const fd = new FormData();
-    fd.append('image', selectedFile);
-    const res = await fetch('/api/extract', { method:'POST', body: fd });
-    const data = await res.json();
-    if(data.error) throw new Error(data.error);
-
-    document.getElementById('urduInput').value = data.text || '';
-    document.getElementById('devaOut').textContent = data.devanagari || '—';
-    document.getElementById('romanOut').textContent = data.roman || '—';
-    showNotes(data.notes);
-    editCard.style.display = 'block';
-    resultCard.style.display = 'block';
-    document.getElementById('imgEditBlock').classList.remove('hidden');
-    editCard.scrollIntoView({behavior:'smooth'});
-  }catch(err){
-    alert('OCR failed: ' + err.message);
-  }finally{
-    extractBtn.disabled = false;
-    document.getElementById('ocrStatus').classList.remove('show');
-  }
-});
-
-document.getElementById('useTextBtn').addEventListener('click', ()=>{
-  const t = document.getElementById('pasteBox').value.trim();
-  if(!t) return;
-  document.getElementById('urduInput').value = t;
-  document.getElementById('confidencePreview').style.display = 'none';
-  document.getElementById('imgEditBlock').classList.add('hidden');  // no source image to edit
-  editCard.style.display = 'block';
-  editCard.scrollIntoView({behavior:'smooth'});
-});
-
-document.getElementById('transliterateBtn').addEventListener('click', async ()=>{
-  const text = document.getElementById('urduInput').value.trim();
-  if(!text) return;
-  document.getElementById('transStatus').classList.add('show');
-  try{
-    const res = await fetch('/api/transliterate', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({text})
-    });
-    const data = await res.json();
-    if(data.error) throw new Error(data.error);
-    document.getElementById('devaOut').textContent = data.devanagari || '—';
-    document.getElementById('romanOut').textContent = data.roman || '—';
-    showNotes(data.notes);
-    resultCard.style.display = 'block';
-    resultCard.scrollIntoView({behavior:'smooth'});
-  }catch(err){
-    alert('Transliteration failed: ' + err.message);
-  }finally{
-    document.getElementById('transStatus').classList.remove('show');
-  }
-});
-
-document.getElementById('renderImgBtn').addEventListener('click', async ()=>{
-  if(!selectedFile){ alert('Upload an image first (this uses the image you extracted from).'); return; }
-  const script = document.querySelector('input[name="imgScript"]:checked').value;
-  const btn = document.getElementById('renderImgBtn');
-  const imgEl = document.getElementById('editedImg');
-  const dl = document.getElementById('downloadImg');
-  btn.disabled = true;
-  document.getElementById('imgStatus').classList.add('show');
-  imgEl.classList.add('hidden');
-  dl.classList.add('hidden');
-  try{
-    const fd = new FormData();
-    fd.append('image', selectedFile);
-    fd.append('script', script);
-    const res = await fetch('/api/render-image', { method:'POST', body: fd });
-    if(!res.ok){
-      let msg = res.statusText;
-      try{ msg = (await res.json()).error || msg; }catch(e){}
-      throw new Error(msg);
-    }
-    const url = URL.createObjectURL(await res.blob());
-    imgEl.src = url; imgEl.classList.remove('hidden');
-    dl.href = url; dl.download = 'urdu-' + script + '.png'; dl.classList.remove('hidden');
-  }catch(err){
-    alert('Image render failed: ' + err.message);
-  }finally{
-    btn.disabled = false;
-    document.getElementById('imgStatus').classList.remove('show');
-  }
-});
-</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

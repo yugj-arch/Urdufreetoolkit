@@ -1,4 +1,10 @@
 .env
 __pycache__/
+.pytest_cache/
 *.pyc
 uploads/
+jobs/
+# model / weight caches downloaded by later-phase providers
+.cache/
+models/
+*.onnx
