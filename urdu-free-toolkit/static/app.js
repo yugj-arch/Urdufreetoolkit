@@ -13,6 +13,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const RECOMMENDED = {
   ocr: ["surya", "easyocr", "rapidocr"],
   translit: ["aksharamukha", "uroman", "rule"],
+  translate: ["nllb", "argos", "deep_translator"],
 };
 
 const state = {
@@ -28,6 +29,7 @@ document.addEventListener("DOMContentLoaded", () => {
   wireSettings();
   $("#run-ocr").addEventListener("click", runOcr);
   $("#run-translit").addEventListener("click", runTranslit);
+  $("#run-translate").addEventListener("click", runTranslate);
   $("#run-render").addEventListener("click", runRender);
   $("#use-paste").addEventListener("click", usePaste);
   $$("[data-pick]").forEach((b) => b.addEventListener("click", () => pick(b.dataset.pick)));
@@ -55,6 +57,7 @@ async function loadProviders() {
   }
   renderEngineList("ocr", "#ocr-engines");
   renderEngineList("translit", "#translit-engines");
+  renderEngineList("translate", "#translate-engines");
   renderRenderSelect();
 }
 
@@ -221,8 +224,60 @@ function fillOcrCol(row) {
 /* ---------- transliteration ---------- */
 function revealTranslit(scroll) {
   $("#translit-card").hidden = false;
+  $("#translate-card").hidden = false;
   if (state.file) $("#render-card").hidden = false;
   if (scroll) $("#translit-card").scrollIntoView({ behavior: "smooth" });
+}
+
+async function runTranslate() {
+  const text = $("#urdu-input").value.trim();
+  const ids = checkedIds("translate");
+  if (!text) return alert("Nothing to translate.");
+  if (!ids.length) return alert("Tick at least one translation engine.");
+  const targets = [];
+  if ($("#tgt-english").checked) targets.push("english");
+  if ($("#tgt-hindi").checked) targets.push("hindi");
+  if (!targets.length) return alert("Pick English or Hindi.");
+
+  const cols = $("#translate-columns");
+  cols.innerHTML = ids.map((id) =>
+    `<div class="col" data-pid="${esc(id)}"><h3><span>${esc(labelFor("translate", id))}</span>` +
+    `<span class="ms">…</span></h3><div class="running">running… (first run downloads a model)</div></div>`).join("");
+  $("#run-translate").disabled = true;
+
+  try {
+    const res = await fetch("/api/translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, providers: ids, targets }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    for (const row of data.results || []) fillTranslateCol(row);
+  } catch (e) {
+    alert("Translation failed: " + e.message);
+  } finally {
+    $("#run-translate").disabled = false;
+  }
+}
+
+function fillTranslateCol(row) {
+  const el = $(`#translate-columns .col[data-pid="${cssEsc(row.provider_id)}"]`);
+  if (!el) return;
+  const head = el.querySelector("h3").outerHTML.replace(">…<", ">" + (row.ms ?? "") + " ms<");
+  if (!row.ok) { el.innerHTML = head + `<div class="err">${esc(row.error || "failed")}</div>`; return; }
+  el.innerHTML = head;
+  if (row.english) {
+    el.appendChild(elWith("div", "lab", "English"));
+    el.appendChild(outBlock(row.english, false));
+    el.appendChild(copyBtn(row.english));
+  }
+  if (row.hindi) {
+    el.appendChild(elWith("div", "lab", "Hindi"));
+    el.appendChild(outBlock(row.hindi, false));
+    el.appendChild(copyBtn(row.hindi));
+  }
+  if (!row.english && !row.hindi) el.appendChild(elWith("div", "running", "no output"));
 }
 
 async function runTranslit() {

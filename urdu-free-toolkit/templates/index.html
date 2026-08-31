@@ -73,8 +73,25 @@
     <div class="columns" id="translit-columns"></div>
   </div>
 
+  <div class="card" id="translate-card" hidden>
+    <h2>3. Translate — Urdu meaning (optional)</h2>
+    <p class="dim">Transliteration keeps the sound; translation gives the meaning in English or Hindi.</p>
+    <div class="engines" id="translate-engines"></div>
+    <div class="quick">
+      <button type="button" class="chip" data-pick="translate:offline">All offline</button>
+      <button type="button" class="chip" data-pick="translate:recommended">Recommended</button>
+      <button type="button" class="chip" data-pick="translate:none">Clear</button>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="tgt-english" checked> English</label>
+      <label><input type="checkbox" id="tgt-hindi"> Hindi</label>
+      <button id="run-translate" class="primary" type="button">Run translation</button>
+    </div>
+    <div class="columns" id="translate-columns"></div>
+  </div>
+
   <div class="card" id="render-card" hidden>
-    <h2>3. Redraw the image (optional)</h2>
+    <h2>4. Redraw the image (optional)</h2>
     <p class="dim">Erase the Urdu in the uploaded image and paint a transliteration where it was.
       Run a transliteration first — the redraw uses that text.</p>
     <div class="row">
