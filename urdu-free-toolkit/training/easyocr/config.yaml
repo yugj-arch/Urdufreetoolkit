@@ -1,0 +1,30 @@
+# Fine-tune config skeleton for EasyOCR's Urdu recognizer via Clova
+# deep-text-recognition-benchmark. VERIFY the architecture + character set
+# against your installed easyocr version before training — see train.md step 2.
+experiment_name: urdu_ft
+train_data: data/lmdb/train
+valid_data: data/lmdb/val
+manualSeed: 1111
+workers: 4
+batch_size: 128
+num_iter: 30000
+valInterval: 1000
+saved_model: ""          # path to the EasyOCR arabic_g2 .pth to fine-tune from (train.md step 2)
+FT: true
+adam: true
+lr: 0.0005
+# --- architecture (EasyOCR "generation2" recognizer) ---
+Transformation: None
+FeatureExtraction: VGG
+SequenceModeling: BiLSTM
+Prediction: CTC
+input_channel: 1
+output_channel: 256
+hidden_size: 256
+imgH: 64
+imgW: 600
+PAD: true
+# --- label space ---
+character: ""             # paste EasyOCR's Urdu/Arabic charset here (train.md step 2)
+sensitive: false
+data_filtering_off: true

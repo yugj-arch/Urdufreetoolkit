@@ -1,0 +1,39 @@
+# PaddleOCR recognition fine-tune from the Arabic PP-OCRv4 model.
+# Run inside a PaddleOCR source checkout (see train.md step 1).
+Global:
+  use_gpu: true
+  epoch_num: 60
+  save_model_dir: ./output/urdu_rec_ft
+  save_epoch_step: 5
+  eval_batch_step: [0, 500]
+  pretrained_model: ./pretrain/arabic_PP-OCRv4_rec_train/best_accuracy
+  character_dict_path: ppocr/utils/dict/arabic_dict.txt
+  max_text_length: 60
+  use_space_char: true
+  save_res_path: ./output/urdu_rec_ft/predicts.txt
+Optimizer:
+  name: Adam
+  lr:
+    name: Cosine
+    learning_rate: 0.0005
+Architecture:
+  model_type: rec
+  algorithm: SVTR_LCNet
+Loss:
+  name: CTCLoss
+Train:
+  dataset:
+    name: SimpleDataSet
+    data_dir: ./data/urdu
+    label_file_list: [./data/urdu/paddle_train.txt]
+  loader:
+    batch_size_per_card: 128
+    num_workers: 4
+Eval:
+  dataset:
+    name: SimpleDataSet
+    data_dir: ./data/urdu
+    label_file_list: [./data/urdu/paddle_val.txt]
+  loader:
+    batch_size_per_card: 128
+    num_workers: 4
