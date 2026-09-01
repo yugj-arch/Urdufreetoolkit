@@ -1,0 +1,18 @@
+.git
+.claude
+docs
+*.md
+!README.md
+
+# app dir: skip everything not needed at runtime
+urdu-free-toolkit/tests
+urdu-free-toolkit/training
+urdu-free-toolkit/eval
+urdu-free-toolkit/.pytest_cache
+urdu-free-toolkit/__pycache__
+**/__pycache__
+**/*.pyc
+
+# never bake secrets into the image
+urdu-free-toolkit/.env
+.env
