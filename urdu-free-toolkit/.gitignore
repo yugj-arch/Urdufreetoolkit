@@ -8,3 +8,9 @@ jobs/
 .cache/
 models/
 *.onnx
+
+# OCR fine-tuning: generated datasets, model checkpoints, downloaded fonts
+/data/
+training/synth/fonts/*
+!training/synth/fonts/.gitkeep
+*.lmdb

@@ -5,8 +5,8 @@ Devanagari (Hindi script) and Roman, and lets you **run several engines side by
 side and compare** the results.
 
 **Free / offline first.** The offline engines need no API key and no internet
-once installed. Paid APIs (OpenAI now; Anthropic / Google / Azure / OCR.space in
-later phases) are *optional* extras you switch on in Settings.
+once installed. Paid / free-tier APIs (OpenAI, Anthropic, Google Gemini, Google
+Cloud Vision) are *optional* extras you switch on in Settings.
 
 ```bash
 pip install -r requirements.txt
@@ -18,25 +18,60 @@ python app.py
 
 Every step is a list of small **provider** modules under `providers/<capability>/`:
 
-| Capability | What it does | Providers now | Providers coming |
-|---|---|---|---|
-| **OCR** | image → Urdu text | OpenAI GPT-4o vision *(API)* | Surya, EasyOCR, PaddleOCR, RapidOCR, docTR, TrOCR, Tesseract *(all offline)* + Claude / Gemini / OCR.space |
-| **Transliteration** | Urdu → Devanagari + Roman | Rule engine *(offline)*, GPT-4o *(API)* | Aksharamukha, uroman, PyICU, IndicXlit, python-hutrans *(offline)* |
-| **Translation** | Urdu → English / Hindi | — | IndicTrans2, NLLB-200, M2M100, Argos *(offline)* + deep-translator + APIs |
-| **Redraw image** | erase Urdu, draw transliteration in place | gpt-image-1 *(API)* | PIL box-cover, OpenCV inpaint, LaMa *(offline)* |
+| Capability | What it does | Shown in the picker (curated — max 4 per step) |
+|---|---|---|
+| **OCR** | image → Urdu text | OpenAI GPT vision, Google Cloud Vision *(API)*, PaddleOCR, EasyOCR *(offline)* |
+| **Transliteration** | Urdu → Devanagari + Roman | GPT *(API)*, Rule engine, Aksharamukha, uroman *(all offline, no key)* |
+
+The picker shows a **curated shortlist** (at most four per step) with a rough
+**price badge** on each engine — offline engines are free; API estimates assume
+one short image / line and drift with provider pricing. Every other engine still
+ships (Gemini vision, Claude vision + transliteration, Surya, RapidOCR, docTR,
+TrOCR, Tesseract, uroman, PyICU) and is re-enabled by editing
+`providers/curation.py`. API model ids are overridable via `OPENAI_MODEL`,
+`ANTHROPIC_MODEL`, `GEMINI_MODEL`.
 
 A registry discovers providers at runtime and reports which can run right now
 (installed? key set?). A parallel **runner** executes the ones you tick, isolating
 any that fail or time out into their own result column. The OCR endpoint streams
 results over SSE so columns fill in as each engine finishes.
 
+### OCR pipeline (offline engines)
+
+`paddle` and `easyocr` don't call the model raw — they run through
+`providers/ocr/_pipeline.py`: preprocess (grayscale, upscale, denoise, CLAHE,
+deskew, binarize) → the engine's detect+recognize → RTL reading-order
+reconstruction → Urdu text normalization → a rule-engine transliteration fill,
+so each offline column shows `urdu + devanagari + roman` like the GPT column.
+
+**Measuring accuracy.** `eval/` scores every OCR engine against cached GPT
+"silver reference" transcriptions:
+
+```bash
+cd urdu-free-toolkit
+python -m eval.run_eval --engines gpt,paddle,easyocr          # scoreboard (CER/WER)
+python -m eval.run_eval --refresh                             # regenerate silver refs (needs OPENAI_API_KEY)
+python -m eval.run_eval --engines paddle,easyocr --check      # CI regression gate vs eval/baseline.json
+```
+
+Fixtures live in `tests/fixtures/ocr/` — see that folder's README to add one.
+
+**Fine-tuning the offline recognizers** (optional, needs a GPU): the CPU-side
+dataset tooling is in `training/` (synthetic Nastaliq/Naskh renderer +
+GPT-distillation aligner + dataset converters); the training itself is a
+copy-paste runbook in `training/README.md`. Once a model exists, point the
+provider at it via `OCR_EASYOCR_RECOG_NETWORK` / `OCR_PADDLE_REC_DIR` — with no
+model set, the stock weights are used.
+
 ### Modes
 
 - **Single image** — upload, tick engines, compare columns, pick the best, then
-  transliterate and (optionally) redraw the image.
+  transliterate.
 - **Paste text** — skip OCR, go straight to comparing transliteration engines.
-- **Batch (100–200 images)** — *coming in a later phase*: a job queue with
-  progress, resume, and CSV / XLSX / ZIP export.
+- **Batch** — queue up to 30 images, tick OCR engines (plus optional
+  transliteration engines), and run them all. Results stream into a table as each
+  file finishes, with a **Download CSV** button. Compare mode is kept: tick
+  several engines and each image gets a row per engine combination.
 
 ## Settings
 
@@ -49,7 +84,8 @@ Click **Settings** in the header to paste API keys. They're written to a local
 - **Vowel restoration is fundamentally a guess.** Urdu script omits short vowels;
   Devanagari and Roman need them. Offline engines fill them with dictionaries and
   heuristics and will be wrong on uncommon words, proper nouns, and poetry. Only
-  a context-aware LLM (the GPT provider) genuinely reasons them out. Always check
+  a context-aware LLM (the GPT / Claude / Gemini providers) genuinely reasons
+  them out. Always check
   the extracted Urdu before trusting the output — that's what the compare view is
   for.
 - **Not a production server.** `app.run(debug=True)` is Flask's dev server.
@@ -57,8 +93,6 @@ Click **Settings** in the header to paste API keys. They're written to a local
   several model downloads (multiple GB, first run only). Each provider degrades
   gracefully — if its library or binary isn't present it just shows as "not
   installed" and the app still runs.
-- **Redraw is an AI re-render, not a pixel patch** (for the `gpt_image`
-  provider): layout and colour match well, fine details and the typeface do not.
 
 ## Repo layout
 
@@ -68,15 +102,21 @@ runner.py              run N providers in parallel (+ SSE stream), per-provider 
 settings.py            read/write API keys to .env
 transliterate.py       the offline rule-based transliteration engine
 providers/
-  base.py              Capability enum, Result dataclasses, BaseProvider
+  base.py              Capability enum, Result dataclasses, BaseProvider (+ price)
   registry.py          discovery + availability + UI metadata
+  curation.py          the curated shortlist each picker shows (FEATURED)
   _openai_common.py    shared OpenAI plumbing for the gpt providers
-  ocr/gpt.py           OpenAI GPT-4o vision OCR
+  _anthropic_common.py shared Anthropic plumbing for the claude providers
+  _gemini_common.py    shared Google Gemini plumbing for the gemini providers
+  ocr/gpt.py           OpenAI GPT vision OCR   (ocr/claude.py, ocr/gemini.py, ...)
+  ocr/_pipeline.py     shared preprocess -> recognize -> RTL -> normalize -> translit-fill
+  ocr/paddle.py        ocr/easyocr_p.py       both run through _pipeline.py
   translit/rule.py     wraps transliterate.py
-  translit/gpt.py      OpenAI GPT-4o transliteration
-  render/gpt_image.py  gpt-image-1 in-place redraw
+  translit/gpt.py      OpenAI GPT transliteration
 static/                app.css, app.js  (no CDN — system fonts only)
 templates/index.html
 tests/                 pytest; heavy providers gated behind RUN_HEAVY=1
+eval/                  CER/WER scoring of every OCR engine vs cached GPT refs
+training/              Phase-2 OCR fine-tune dataset tooling + GPU runbook
 docs/superpowers/       design spec + phased implementation plans
 ```

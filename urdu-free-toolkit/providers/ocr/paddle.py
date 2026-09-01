@@ -29,10 +29,19 @@ _engine = None
 _ENGINE_CFG = dict(
     lang="ur", use_textline_orientation=True, enable_mkldnn=False,
     text_det_thresh=0.3, text_det_box_thresh=0.5, text_det_unclip_ratio=1.8,
-    drop_score=0.4,
+    text_rec_score_thresh=0.4,   # renamed from "drop_score" as of paddleocr 3.7
 )
-# Paddle's detector prefers grayscale contrast over hard binarization.
-_CFG = OcrConfig(binarize="none", engine={})
+# Minimal kwargs every 2.x/3.x PaddleOCR release has accepted. Fallback when the
+# full tuned set is rejected by a version whose __init__ takes **kwargs but
+# validates it internally (raises its own ValueError, not a Python TypeError —
+# _supported_kwargs can't filter that away).
+_SAFE_ENGINE_CFG = dict(lang="ur", enable_mkldnn=False)
+# PaddleOCR 3.x's pipeline (doc-orientation, unwarp, detection, recognition)
+# requires a 3-channel image -- a 2D grayscale array crashes deep inside it
+# with "IndexError: tuple index out of range" (confirmed against 3.7.0).
+# Keep upscale/deskew/pad (channel-preserving); skip grayscale/denoise/clahe/
+# binarize, which the shared _prep stages all force to 2D.
+_CFG = OcrConfig(grayscale=False, denoise=False, clahe=False, binarize="none", engine={})
 
 
 def _supported_kwargs(cls, want: dict) -> dict:
@@ -55,10 +64,16 @@ def _get_engine():
         kw = _supported_kwargs(PaddleOCR, want)
         try:
             _engine = PaddleOCR(**kw)
-        except TypeError:
-            legacy = _supported_kwargs(PaddleOCR, {**want, "use_angle_cls": True})
-            legacy.pop("use_textline_orientation", None)
-            _engine = PaddleOCR(**legacy)
+        except (TypeError, ValueError):
+            # Either a pre-3.x __init__ (TypeError on the new names) or a 3.x+
+            # __init__ that took **kwargs but rejected one internally (its own
+            # ValueError). Retry with the small, version-stable kwarg set.
+            safe = _supported_kwargs(PaddleOCR, dict(_SAFE_ENGINE_CFG))
+            try:
+                _engine = PaddleOCR(**safe)
+            except TypeError:
+                legacy = _supported_kwargs(PaddleOCR, {**safe, "use_angle_cls": True})
+                _engine = PaddleOCR(**legacy)
     return _engine
 
 
