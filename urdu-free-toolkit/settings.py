@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import config
+
 KNOWN_KEYS = (
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -39,7 +41,12 @@ def _read_lines() -> list[str]:
 
 def save(values: dict[str, str]) -> list[str]:
     """Upsert each known key present in ``values`` into ``.env`` (other lines and
-    ordering preserved). Empty string removes the key. Returns key names written."""
+    ordering preserved). Empty string removes the key. Returns key names written.
+
+    A no-op on Vercel, whose filesystem is read-only — keys there come from the
+    project's environment variables."""
+    if config.settings_readonly():
+        return []
     lines = _read_lines()
     written: list[str] = []
     for key in KNOWN_KEYS:

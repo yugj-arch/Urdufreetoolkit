@@ -1,4 +1,5 @@
 /* Urdu Toolkit front-end. No dependencies. Talks to:
+   GET  /api/config           -> runtime flags (batch cap, settings read-only)
    GET  /api/providers        -> engine lists per capability
    POST /api/ocr              -> SSE stream, one row per engine
    POST /api/transliterate    -> {results:[...]}
@@ -20,6 +21,7 @@ const state = {
   providers: { ocr: [], translit: [] },
   batchFiles: [], // File[] queued in the Batch tab
   batchRows: [],  // accumulated result rows, for the CSV download
+  config: { on_vercel: false, batch_max_files: 30, settings_readonly: false },
 };
 
 /* ---------- boot ---------- */
@@ -32,8 +34,27 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#run-translit").addEventListener("click", runTranslit);
   $("#use-paste").addEventListener("click", usePaste);
   $$("[data-pick]").forEach((b) => b.addEventListener("click", () => pick(b.dataset.pick)));
+  loadConfig();
   loadProviders();
 });
+
+/* ---------- runtime config ---------- */
+async function loadConfig() {
+  try {
+    const res = await fetch("/api/config");
+    if (res.ok) Object.assign(state.config, await res.json());
+  } catch (e) { /* keep the local defaults */ }
+  applyConfig();
+}
+
+/* Reflect the server flags in the UI: shrink the Batch cap hint, and when the
+   host filesystem is read-only (Vercel) tell the user keys live in env vars. */
+function applyConfig() {
+  const hint = $("#batch-drop-hint");
+  if (hint) hint.innerHTML =
+    `<strong>Click or drop</strong> images (JPG / PNG) — up to ${batchMax()}`;
+  renderBatchQueue();
+}
 
 function wireTabs() {
   $$(".tab").forEach((t) => t.addEventListener("click", () => {
@@ -302,12 +323,14 @@ function wireBatch() {
   $("#batch-csv").addEventListener("click", downloadBatchCsv);
 }
 
-const BATCH_MAX_FILES = 30;
+/* Batch cap comes from GET /api/config — 30 locally, fewer on Vercel where the
+   request body is capped at ~4.5 MB. */
+const batchMax = () => state.config.batch_max_files || 30;
 
 function addBatchFiles(fileList) {
   for (const f of fileList) {
     if (!f.type.startsWith("image/")) continue;
-    if (state.batchFiles.length >= BATCH_MAX_FILES) break;
+    if (state.batchFiles.length >= batchMax()) break;
     if (state.batchFiles.some((x) => x.name === f.name && x.size === f.size)) continue;
     state.batchFiles.push(f);
   }
@@ -321,7 +344,7 @@ function renderBatchQueue() {
   if (!n) { box.innerHTML = '<p class="dim">No images queued.</p>'; return; }
   box.innerHTML =
     `<p class="dim">${n} image${n === 1 ? "" : "s"} queued` +
-    (n >= BATCH_MAX_FILES ? ` (max ${BATCH_MAX_FILES})` : "") + `</p>` +
+    (n >= batchMax() ? ` (max ${batchMax()})` : "") + `</p>` +
     state.batchFiles.map((f, i) =>
       `<div class="batch-file"><span>${esc(f.name)}</span>` +
       `<button type="button" data-rm="${i}">&times;</button></div>`).join("");
@@ -424,10 +447,15 @@ function wireSettings() {
   const modal = $("#settings-modal");
   $("#settings-btn").addEventListener("click", async () => {
     const status = await (await fetch("/api/settings")).json();
+    const ro = state.config.settings_readonly;
     $("#settings-fields").innerHTML = Object.keys(status).map((k) =>
       `<label>${esc(k)} <span class="dim">${status[k] ? "(set)" : "(not set)"}</span></label>
        <input type="${k.endsWith("KEY") ? "password" : "text"}" data-key="${esc(k)}"
-              placeholder="${status[k] ? "leave blank to keep" : ""}">`).join("");
+              ${ro ? "disabled" : ""}
+              placeholder="${ro ? "" : (status[k] ? "leave blank to keep" : "")}">`).join("");
+    const note = $("#settings-readonly-note");
+    if (note) note.hidden = !ro;
+    $("#save-settings").disabled = ro;
     $("#settings-status").textContent = "";
     if (!state.providers.ocr.length) await loadProviders();
     renderSettingsEngines();
@@ -435,6 +463,7 @@ function wireSettings() {
   });
   $("#close-settings").addEventListener("click", () => (modal.hidden = true));
   $("#save-settings").addEventListener("click", async () => {
+    if (state.config.settings_readonly) return;
     const body = {};
     $$("#settings-fields input").forEach((i) => {
       if (i.value.trim()) body[i.dataset.key] = i.value.trim();

@@ -83,7 +83,7 @@
 
       <label class="dropzone" id="batch-dropzone">
         <input type="file" id="batch-file-input" accept="image/*" multiple hidden>
-        <span><strong>Click or drop</strong> images (JPG / PNG) — up to 30</span>
+        <span id="batch-drop-hint"><strong>Click or drop</strong> images (JPG / PNG) — up to 30</span>
       </label>
       <div id="batch-queue"><p class="dim">No images queued.</p></div>
 
@@ -137,6 +137,9 @@
     <p class="dim">Written to a local <code>.env</code> file next to the app. Offline
       engines need none of these. A field showing “set” already has a value — leave it
       blank to keep it, or type a new value to replace it.</p>
+    <p class="dim" id="settings-readonly-note" hidden>This site runs on a read-only
+      host — keys are set as environment variables in the Vercel project, not from
+      here. The list below just shows which are configured.</p>
     <div id="settings-fields"></div>
     <div class="row">
       <button id="save-settings" class="primary" type="button">Save</button>

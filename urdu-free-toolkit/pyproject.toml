@@ -1,0 +1,29 @@
+# Deployment-only dependency manifest.
+#
+# `requirements.txt` stays the full local set (offline OCR engines, PyTorch,
+# fine-tuning tooling — several GB). Vercel's 250 MB function limit can't hold
+# that, so `.vercelignore` hides requirements.txt from the build and Vercel's
+# Python builder installs from THIS file instead: just the cloud engines plus
+# the two pure-Python offline transliterators. Offline OCR (easyocr/paddle/...)
+# shows as "not installed" on the deployed site and the app runs fine without it.
+#
+# Local dev is unaffected — keep using `pip install -r requirements.txt`.
+
+[project]
+name = "urdu-toolkit"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "Flask==3.0.3",
+    "python-dotenv==1.0.1",
+    "Pillow==10.4.0",
+    "openai>=1.40.0",
+    "anthropic>=0.40.0",
+    "google-genai>=1.0.0",
+    "groq>=0.11.0",
+    "aksharamukha>=2.2",
+    "uroman>=1.3",
+]
+
+[tool.vercel]
+entrypoint = "app:app"

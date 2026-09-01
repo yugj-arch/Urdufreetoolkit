@@ -18,6 +18,7 @@ import json
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
 
+import config
 import runner
 import settings
 from providers import registry
@@ -26,14 +27,23 @@ from providers.base import Capability, TranslitOpts
 load_dotenv(settings.env_path())
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB — batch tab uploads many images
-
-BATCH_MAX_FILES = 30
+app.config["MAX_CONTENT_LENGTH"] = config.max_content_length()
 
 
 @app.get("/")
 def index():
     return render_template("index.html")
+
+
+@app.get("/api/config")
+def api_config():
+    """Front-end feature flags that depend on where the app is running. On Vercel
+    the Batch tab caps at fewer files and the Settings panel goes read-only."""
+    return jsonify({
+        "on_vercel": config.on_vercel(),
+        "batch_max_files": config.batch_max_files(),
+        "settings_readonly": config.settings_readonly(),
+    })
 
 
 @app.get("/api/providers")
@@ -108,7 +118,7 @@ def api_batch():
         return jsonify({"error": "Pick at least one OCR engine."}), 400
     tr_ids = [s for s in (request.form.get("translit_providers") or "").split(",") if s]
     opts = TranslitOpts(roman_style=request.form.get("roman_style", "natural"))
-    images = [(f.filename, f.read()) for f in files[:BATCH_MAX_FILES]]
+    images = [(f.filename, f.read()) for f in files[:config.batch_max_files()]]
     total = len(images)
 
     def emit(row: dict) -> str:
@@ -149,11 +159,19 @@ def api_settings_get():
 @app.post("/api/settings")
 def api_settings_post():
     """JSON key->value. Writes `.env`, applies to the environment, and busts the
-    provider cache so API providers re-check their keys. Echoes only names."""
+    provider cache so API providers re-check their keys. Echoes only names.
+
+    On Vercel the filesystem is read-only: nothing is written and the response
+    carries ``readonly: true`` so the UI can point the user at the project's
+    environment variables instead."""
+    if config.settings_readonly():
+        return jsonify({"saved": [], "readonly": True,
+                        "message": "Keys are set as environment variables in the "
+                                   "Vercel project, not from here."})
     data = request.get_json(force=True) or {}
     saved = settings.save({k: v for k, v in data.items() if isinstance(v, str)})
     registry.reset_cache()
-    return jsonify({"saved": saved})
+    return jsonify({"saved": saved, "readonly": False})
 
 
 if __name__ == "__main__":

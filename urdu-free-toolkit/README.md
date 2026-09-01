@@ -68,16 +68,26 @@ model set, the stock weights are used.
 - **Single image** — upload, tick engines, compare columns, pick the best, then
   transliterate.
 - **Paste text** — skip OCR, go straight to comparing transliteration engines.
-- **Batch** — queue up to 30 images, tick OCR engines (plus optional
-  transliteration engines), and run them all. Results stream into a table as each
-  file finishes, with a **Download CSV** button. Compare mode is kept: tick
-  several engines and each image gets a row per engine combination.
+- **Batch** — queue up to 30 images (4 on the Vercel deployment), tick OCR
+  engines (plus optional transliteration engines), and run them all. Results
+  stream into a table as each file finishes, with a **Download CSV** button.
+  Compare mode is kept: tick several engines and each image gets a row per engine
+  combination.
 
 ## Settings
 
 Click **Settings** in the header to paste API keys. They're written to a local
 `.env` file next to `app.py` (git-ignored), applied immediately, and only the key
 *names* are ever sent back to the browser. Offline engines ignore all of this.
+On a read-only host (Vercel) the panel is read-only — keys come from the
+project's environment variables and it just shows which are set.
+
+## Deploy (Vercel)
+
+`git push` → live site, cloud engines only. One-time dashboard setup (import the
+repo, Root Directory = `urdu-free-toolkit`, add keys) is in **[DEPLOY.md](DEPLOY.md)**.
+`requirements.txt` is left untouched; Vercel installs the trimmed set from
+`pyproject.toml` (`.vercelignore` hides `requirements.txt` from the build).
 
 ## Honest limitations
 
@@ -88,7 +98,10 @@ Click **Settings** in the header to paste API keys. They're written to a local
   them out. Always check
   the extracted Urdu before trusting the output — that's what the compare view is
   for.
-- **Not a production server.** `app.run(debug=True)` is Flask's dev server.
+- **`python app.py` is the dev server** (`app.run(debug=True)`). The Vercel
+  deployment runs the same `app` under the platform's WSGI instead — see
+  [DEPLOY.md](DEPLOY.md) for what's different there (cloud engines only, buffered
+  SSE, ~4.5 MB upload cap).
 - **Offline engines are heavy to install.** Later phases pull in PyTorch and
   several model downloads (multiple GB, first run only). Each provider degrades
   gracefully — if its library or binary isn't present it just shows as "not
@@ -98,9 +111,11 @@ Click **Settings** in the header to paste API keys. They're written to a local
 
 ```
 app.py                 Flask routes over the provider pipeline
+config.py              where-am-I-running switches (Vercel: batch cap, read-only settings)
 runner.py              run N providers in parallel (+ SSE stream), per-provider timeout
 settings.py            read/write API keys to .env
 transliterate.py       the offline rule-based transliteration engine
+vercel.json / pyproject.toml / .vercelignore   deploy config — see DEPLOY.md
 providers/
   base.py              Capability enum, Result dataclasses, BaseProvider (+ price)
   registry.py          discovery + availability + UI metadata

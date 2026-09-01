@@ -18,3 +18,12 @@ def test_app_js_hits_endpoints():
     js = (ROOT / "static/app.js").read_text(encoding="utf-8")
     for ep in ("/api/providers", "/api/ocr", "/api/transliterate", "/api/batch", "/api/settings"):
         assert ep in js
+
+
+def test_app_js_reads_runtime_config():
+    js = (ROOT / "static/app.js").read_text(encoding="utf-8")
+    assert "/api/config" in js
+    # the Batch cap comes from the server, not a hard-coded 30
+    assert "batch_max_files" in js
+    # the Settings panel reacts to the read-only flag Vercel sets
+    assert "settings_readonly" in js

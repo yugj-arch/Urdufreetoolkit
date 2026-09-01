@@ -1,0 +1,16 @@
+# Keep the heavy local dependency set out of the serverless build.
+# Vercel installs from pyproject.toml instead (cloud engines only).
+requirements.txt
+
+# Not needed at runtime on the deployed site
+tests/
+training/
+eval/
+pytest.ini
+.pytest_cache/
+__pycache__/
+
+# Never ship secrets; the example stays
+.env
+.env.*
+!.env.example
