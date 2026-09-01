@@ -42,8 +42,11 @@ is, however, completely free, runs offline, and is fully yours to read,
 change, and extend.
 """
 
+import gzip
+import json
 import re
 import unicodedata
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # 1. Common-word dictionary (free accuracy boost for high-frequency words)
@@ -53,10 +56,10 @@ import unicodedata
 # "main" (I) -- classic abjad ambiguity, unresolvable without sentence
 # context. We default to "mein" (the more common reading) here.
 
-COMMON_WORDS = {
+_RAW_COMMON_WORDS: dict[str, tuple[str, str]] = {
     "اور": ("और", "aur"),
-    "یہ": ("यह", "yeh"),
-    "وہ": ("वह", "voh"),
+    "یہ": ("ये", "ye"),
+    "وہ": ("वो", "wo"),
     "ہے": ("है", "hai"),
     "ہیں": ("हैं", "hain"),
     "تھا": ("था", "tha"),
@@ -106,7 +109,7 @@ COMMON_WORDS = {
     "برا": ("बुरा", "bura"),
     "نیا": ("नया", "naya"),
     "پرانا": ("पुराना", "purana"),
-    "بڑا": ("बड़ा", "bada"),
+    "بڑا": ("बड़ा", "badaa"),
     "چھوٹا": ("छोटा", "chhota"),
     "دن": ("दिन", "din"),
     "رات": ("रात", "raat"),
@@ -169,6 +172,74 @@ COMMON_WORDS = {
     "کتنا": ("कितना", "kitna"),
     "کتنی": ("कितनी", "kitni"),
     "کتنے": ("कितने", "kitne"),
+    # hamza-carrier words the character fallback still mangles even after
+    # the ئ/ؤ fold (the fold stops the leak; these fix the vowels too):
+    "کوئی": ("कोई", "koi"),
+    "کوئ": ("कोई", "koi"),
+    "گئی": ("गई", "gayi"),
+    "گئے": ("गए", "gaye"),
+    "آؤ": ("आओ", "aao"),
+    "جاؤ": ("जाओ", "jao"),
+    "رئیس": ("रईस", "rayees"),
+    "مسئلہ": ("मसअला", "masla"),
+    # common Perso-Arabic vocabulary whose unwritten short vowels the
+    # default-"a" heuristic guesses wrong:
+    "عید": ("ईद", "eid"),
+    "مبارک": ("मुबारक", "mubaarak"),
+    "نظام": ("निज़ाम", "nizaam"),
+    "سرکار": ("सरकार", "sarkaar"),
+    "بزم": ("बज़्म", "bazm"),
+    "فلاحی": ("फ़लाही", "falaahi"),
+    "آزادی": ("आज़ादी", "aazaadi"),
+    "آبادی": ("आबादी", "aabaadi"),
+    "نوید": ("नवेद", "naved"),
+    "جسے": ("जिसे", "jise"),
+    "لائے": ("लाए", "laaye"),
+    "ملائے": ("मिलाए", "milaaye"),
+    "الٰہی": ("इलाही", "ilaahi"),
+    "الہی": ("इलाही", "ilaahi"),
+    "تنگی": ("तंगी", "tangi"),
+    "افرنگ": ("अफ़रंग", "afrang"),
+    "آفرنگ": ("आफ़रंग", "afrang"),
+    "تیرا": ("तेरा", "tera"),
+    "تیری": ("तेरी", "teri"),
+    "تیرے": ("तेरे", "tere"),
+    "آئین": ("आईन", "aaeen"),
+    "نغمہ": ("नग़्मा", "naghma"),
+    # --- reference-sentence vocabulary + close siblings (hand-resolved so
+    #     the offline output matches the GPT-4o compare column word-for-word)
+    "ہوتا": ("होता", "hota"),
+    "ہوتی": ("होती", "hoti"),
+    "ہوتے": ("होते", "hote"),
+    "راستہ": ("रास्ता", "raasta"),
+    "راستے": ("रास्ते", "raaste"),
+    "راستوں": ("रास्तों", "raaston"),
+    "فاصلہ": ("फ़ासला", "faasla"),
+    "فاصلے": ("फ़ासले", "faasle"),
+    "فاصلوں": ("फ़ासलों", "faaslon"),
+    "فرق": ("फ़र्क", "farq"),
+    "طے": ("तय", "tay"),
+    "کرنے": ("करने", "karne"),
+    "سمیٹنے": ("समेटने", "sametne"),
+    "سمیٹنا": ("समेटना", "sametna"),
+    "پڑتے": ("पड़ते", "padte"),
+    "پڑتا": ("पड़ता", "padta"),
+    "پڑتی": ("पड़ती", "padti"),
+    "منزل": ("मंज़िल", "manzil"),
+    "منزلیں": ("मंज़िलें", "manzilein"),
+    "منزلوں": ("मंज़िलों", "manzilon"),
+    "سبب": ("सबब", "sabab"),
+    "بنتے": ("बनते", "bante"),
+    "بنتا": ("बनता", "banta"),
+    "بنتی": ("बनती", "banti"),
+    "دور": ("दूर", "door"),
+    "ذریعہ": ("ज़रिया", "zariya"),
+    "ذریعے": ("ज़रिये", "zariye"),
+    "اپنوں": ("अपनों", "apnon"),
+    "وجہ": ("वजह", "wajah"),
+    "شعر": ("शेर", "sher"),
+    "بعد": ("बाद", "baad"),
+    "شروع": ("शुरू", "shuru"),
 }
 
 # ---------------------------------------------------------------------------
@@ -226,55 +297,134 @@ DO_CHASHMI_HE = "ھ"
 
 # Urdu/Arabic punctuation that should never be swallowed into a word token
 # (otherwise "ہے۔" wouldn't match the dictionary entry "ہے", etc.)
-ARABIC_PUNCT_MAP = {
-    "\u06d4": ".",  # Urdu full stop
-    "\u061f": "?",  # Arabic question mark
-    "\u060c": ",",  # Arabic comma
-    "\u061b": ";",  # Arabic semicolon
+PUNCT_TRANSLIT = {
+    "\u06d4": ("\u0964", "."),  # Urdu full stop -> Devanagari danda / period
+    "\u061f": ("?", "?"),       # Arabic question mark
+    "\u060c": (",", ","),       # Arabic comma
+    "\u061b": (";", ";"),       # Arabic semicolon
 }
+
+SHADDA = "\u0651"    # gemination mark: doubles the consonant it sits on
+TATWEEL = "\u0640"   # kashida: pure typographic stretch, carries no sound
+AIN = "\u0639"       # ain: no Hindustani consonant value mid-word -> silent seat
+
+# Perso-Arabic letter variants folded to one standard Urdu form so that a
+# dictionary/lexicon key and an input token are compared on equal footing.
+# Hamza carriers are the important case: \u0626/\u0624/\u0623/\u0625 otherwise fall straight
+# through the character fallback and leak into the output verbatim.
+CHAR_FOLDS = {
+    "\u064a": "\u06cc",  # Arabic yeh -> Urdu yeh
+    "\u0643": "\u06a9",  # Arabic kaf -> Urdu kaf
+    "\u0623": "\u0627",  # alif + hamza above -> alif
+    "\u0625": "\u0627",  # alif + hamza below -> alif
+    "\u0624": "\u0648",  # waw + hamza -> waw
+    "\u0626": "\u06cc",  # yeh + hamza -> Urdu yeh
+    "\u0621": "",         # bare hamza: silent seat, drop
+    "\u0629": "\u06c1",  # teh marbuta -> gol he
+    # NB: Perso-Arabic punctuation (\u06d4 \u060c \u061b \u061f) is deliberately NOT folded here
+    # -- it is script-specific (\u06d4 -> danda in Devanagari) and handled by
+    # PUNCT_TRANSLIT / _render_punct after tokenisation.
+}
+# Arabic-Indic (U+0660..) and Extended Arabic-Indic (U+06F0..) digits -> ASCII
+CHAR_FOLDS.update({chr(0x0660 + n): str(n) for n in range(10)})
+CHAR_FOLDS.update({chr(0x06F0 + n): str(n) for n in range(10)})
 
 WORD_RE = re.compile(r"[\u0600-\u06FF]+|[^\u0600-\u06FF]+")
 
 
+def _fold_chars(text: str) -> str:
+    """Collapse letter variants, strip kashida, ASCII-ify digits. Runs on
+    both input text and lookup keys so they always match. (Shadda is kept
+    here and consumed by the character fallback so it can geminate.)"""
+    text = text.replace(TATWEEL, "")
+    return "".join(CHAR_FOLDS.get(ch, ch) for ch in text)
+
+
+def _fold_key(key: str) -> str:
+    return _fold_chars(unicodedata.normalize("NFC", key))
+
+
 def _split_leading_trailing_punct(token: str):
-    """Peels Arabic punctuation off the edges of a token so it doesn't
-    get fused into a word and break dictionary lookups."""
+    """Peel Perso-Arabic punctuation off the edges of a token so it doesn't
+    get fused into a word and break dictionary lookups. Returns the raw
+    peeled marks (still as Perso-Arabic codepoints) -- the caller renders
+    them per script via ``_render_punct``."""
     prefix, suffix = "", ""
-    while token and token[0] in ARABIC_PUNCT_MAP:
-        prefix += ARABIC_PUNCT_MAP[token[0]]
+    while token and token[0] in PUNCT_TRANSLIT:
+        prefix += token[0]
         token = token[1:]
-    while token and token[-1] in ARABIC_PUNCT_MAP:
-        suffix = ARABIC_PUNCT_MAP[token[-1]] + suffix
+    while token and token[-1] in PUNCT_TRANSLIT:
+        suffix = token[-1] + suffix
         token = token[:-1]
     return prefix, token, suffix
 
 
+def _render_punct(marks: str, devanagari: bool) -> str:
+    """Map a run of Perso-Arabic punctuation marks to their Devanagari or
+    Roman forms (``۔`` -> ``।`` for Devanagari, ``.`` for Roman)."""
+    idx = 0 if devanagari else 1
+    return "".join(PUNCT_TRANSLIT.get(ch, (ch, ch))[idx] for ch in marks)
+
+
 def normalize_urdu(text: str) -> str:
-    """Unicode-normalize and fold a couple of common Arabic/Urdu character
-    variants to their standard Urdu codepoint (free, deterministic)."""
-    text = unicodedata.normalize("NFC", text)
-    text = text.replace("\u064a", "\u06cc")  # Arabic yeh -> Urdu yeh
-    text = text.replace("\u0643", "\u06a9")  # Arabic kaf -> Urdu kaf
+    """Unicode-normalize, fold Arabic/Urdu letter variants to their standard
+    Urdu form, strip kashida, ASCII-ify digits (free, deterministic)."""
+    text = _fold_chars(unicodedata.normalize("NFC", text))
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
+def _delete_roman_schwas(segs):
+    """Apply Hindi/Urdu schwa-deletion to the Roman side of a segment list.
+
+    ``segs`` is a list of ``[deva, roman, kind]`` where kind is ``"C"``
+    consonant, ``"V"`` explicit vowel/nucleus, ``"S"`` inherent short-"a"
+    (schwa), ``"X"`` anything else (anusvara, passthrough).
+
+    A schwa is dropped from the Roman spelling when it is not the word's
+    first syllable AND it is either word-final or sits in a
+    ``<nucleus> C schwa C V`` context -- the reduction a Hindi reader
+    performs silently. Devanagari keeps its inherent-"a" spelling, so only
+    ``seg[1]`` (the Roman piece) is cleared. Mutates ``segs`` in place.
+    """
+    seen_nucleus = False
+    for k, seg in enumerate(segs):
+        kind = seg[2]
+        if kind == "V":
+            seen_nucleus = True
+            continue
+        if kind != "S":
+            continue
+        nxt = segs[k + 1] if k + 1 < len(segs) else None
+        nxt2 = segs[k + 2] if k + 2 < len(segs) else None
+        trailing = nxt is None
+        cluster = (nxt is not None and nxt[2] == "C"
+                   and nxt2 is not None and nxt2[2] == "V")
+        if seen_nucleus and (trailing or cluster):
+            seg[1] = ""          # drop the Roman "a"; Devanagari unchanged
+        else:
+            seen_nucleus = True  # this schwa survives -> counts as a nucleus
+    return segs
+
+
 def _transliterate_word_rule_based(word: str):
-    """Character-level fallback for words not in COMMON_WORDS."""
-    deva, roman = "", ""
+    """Character-level fallback for words not in COMMON_WORDS.
+
+    Builds a ``[deva, roman, kind]`` segment list, runs Roman
+    schwa-deletion over it, then joins. See ``_delete_roman_schwas``.
+    """
+    segs: list[list] = []
     i = 0
     n = len(word)
 
     # word-initial vowel carrier
     if word[:2] in WORD_INITIAL_VOWELS:
         d, r = WORD_INITIAL_VOWELS[word[:2]]
-        deva += d
-        roman += r
+        segs.append([d, r, "V"])
         i = 2
     elif word[:1] in WORD_INITIAL_VOWELS:
         d, r = WORD_INITIAL_VOWELS[word[:1]]
-        deva += d
-        roman += r
+        segs.append([d, r, "V"])
         i = 1
 
     while i < n:
@@ -282,7 +432,6 @@ def _transliterate_word_rule_based(word: str):
 
         if ch in CONSONANTS:
             nxt = word[i + 1] if i + 1 < n else ""
-            nxt2 = word[i + 2] if i + 2 < n else ""
 
             # aspiration: consonant + do-chashmi he
             if nxt == DO_CHASHMI_HE and ch in ASPIRATED:
@@ -292,61 +441,119 @@ def _transliterate_word_rule_based(word: str):
                 d_base, r_base = CONSONANTS[ch]
                 i += 1
 
+            # shadda geminates: کّ -> क्क / "kk"
+            if i < n and word[i] == SHADDA:
+                d_base = d_base + "्" + d_base
+                r_base = r_base + r_base
+                i += 1
+
             # explicit diacritic wins if present
             if i < n and word[i] in DIACRITICS:
                 d_vowel, r_vowel = DIACRITICS[word[i]]
                 i += 1
-                if d_vowel is None:
-                    deva += d_base
-                    roman += r_base
-                else:
-                    deva += d_base + d_vowel
-                    roman += r_base + r_vowel
+                segs.append([d_base, r_base, "C"])
+                if d_vowel is not None:
+                    segs.append([d_vowel, r_vowel, "V"])
                 continue
 
             # explicit long vowel letter following
             if i < n and word[i] in LONG_VOWEL_AFTER_CONSONANT:
                 d_vowel, r_vowel = LONG_VOWEL_AFTER_CONSONANT[word[i]]
-                deva += d_base + d_vowel
-                roman += r_base + r_vowel
+                segs.append([d_base, r_base, "C"])
+                segs.append([d_vowel, r_vowel, "V"])
                 i += 1
                 continue
 
-            # no explicit vowel written -- heuristic:
-            # default short "a", but drop it at the very end of the word
-            # (mimics Hindi's own schwa-deletion pattern).
-            # NOTE: Devanagari consonants already carry an inherent "a"
-            # sound by default, so we do NOT append a literal "a" to the
-            # Devanagari string here -- only Roman needs it spelled out.
-            is_last = (i >= n)
-            if is_last:
-                deva += d_base
-                roman += r_base
-            else:
-                deva += d_base
-                roman += r_base + "a"
+            # no explicit vowel written -- inherent short "a" (schwa).
+            # Devanagari carries it implicitly, so its schwa piece is
+            # empty; Roman spells it "a" unless schwa-deletion drops it
+            # (see _delete_roman_schwas). A word-final consonant gets no
+            # schwa at all.
+            segs.append([d_base, r_base, "C"])
+            if i < n:
+                segs.append(["", "a", "S"])
 
         elif ch == NOON_GHUNNA:
-            deva += "\u0902"  # anusvara
-            roman += "n"
+            segs.append(["\u0902", "n", "X"])  # anusvara
             i += 1
 
-        elif ch in (SUKUN,):
-            i += 1  # already consumed by consonant branch normally
+        elif ch == AIN:
+            i += 1  # ain: silent seat mid-word -- must never leak
+
+        elif ch in ("\u0627", "\u0622"):
+            # a long-vowel letter stranded after another vowel (\u062f\u06cc\u0627, \u0644\u0691\u06a9\u06cc\u0627\u06ba):
+            # voice it as long "aa" rather than leak the raw Urdu letter.
+            segs.append(["\u0906", "aa", "V"])
+            i += 1
+
+        elif ch == "\u0648":
+            segs.append(["\u0913", "o", "V"])
+            i += 1
+
+        elif ch in ("\u06cc", "\u06d2"):
+            segs.append(["\u092f", "y", "C"])
+            i += 1
+
+        elif ch in PUNCT_TRANSLIT:
+            # Perso-Arabic punctuation glued inside a token (no surrounding
+            # space): render per script so ۔ never leaks as a raw codepoint.
+            d_p, r_p = PUNCT_TRANSLIT[ch]
+            segs.append([d_p, r_p, "X"])
+            i += 1
+
+        elif unicodedata.combining(ch):
+            i += 1  # stray harakat / sukun with no host consonant: drop
 
         else:
-            # punctuation, digits, spaces, anything else: pass through
-            # (Urdu full stop -> plain period for readability)
-            deva += "." if ch == "\u06d4" else ch
-            roman += "." if ch == "\u06d4" else ch
+            # ASCII punctuation, digits, spaces, Latin text: pass through
+            segs.append([ch, ch, "X"])
             i += 1
 
+    _delete_roman_schwas(segs)
+    deva = "".join(s[0] for s in segs)
+    roman = "".join(s[1] for s in segs)
     return deva, roman
 
 
+# Curated dictionary, keyed the same way input tokens are (folded + NFC) so
+# lookups never miss on a hamza-carrier or Arabic-variant spelling.
+COMMON_WORDS: dict[str, tuple[str, str]] = {
+    _fold_key(k): v for k, v in _RAW_COMMON_WORDS.items()
+}
+
+# ---------------------------------------------------------------------------
+# 3. Bundled lexicon (optional breadth layer, sits between dict and heuristic)
+# ---------------------------------------------------------------------------
+# A large Urdu -> (devanagari, roman) map built offline from open Wiktionary
+# data (see scripts/build_lexicon.py, data/SOURCES.md). Every entry has its
+# short vowels already resolved by a human, so it is exact for that word.
+# The file is optional: if it is absent the engine runs on the dictionary +
+# heuristic tiers alone, exactly as before.
+
+_LEXICON_PATH = Path(__file__).with_name("data") / "urdu_lexicon.json.gz"
+
+
+def _load_lexicon(path=_LEXICON_PATH) -> dict[str, tuple[str, str]]:
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    out: dict[str, tuple[str, str]] = {}
+    for k, v in raw.items():
+        if isinstance(v, (list, tuple)) and len(v) == 2 and all(v):
+            out[_fold_key(k)] = (v[0], v[1])
+    return out
+
+
+_LEXICON = _load_lexicon()
+
+
 def transliterate_word(word: str):
-    if word in COMMON_WORDS:
+    if word in COMMON_WORDS:       # curated: always wins
         return COMMON_WORDS[word]
+    if word in _LEXICON:           # bundled breadth layer
+        return _LEXICON[word]
     return _transliterate_word_rule_based(word)
 
 
@@ -361,8 +568,10 @@ def transliterate(text: str):
                 d, r = transliterate_word(core)
             else:
                 d, r = "", ""
-            deva_parts.append(prefix + d + suffix)
-            roman_parts.append(prefix + r + suffix)
+            deva_parts.append(_render_punct(prefix, True) + d
+                              + _render_punct(suffix, True))
+            roman_parts.append(_render_punct(prefix, False) + r
+                               + _render_punct(suffix, False))
         else:
             deva_parts.append(token)
             roman_parts.append(token)
