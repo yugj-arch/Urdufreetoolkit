@@ -82,8 +82,17 @@ def _badge(p: BaseProvider, ok: bool) -> str:
     return "api" if ok else "needs key"
 
 
-def for_ui(capability: Capability | None = None) -> list[dict]:
-    """Rows for the frontend picker, sorted available-first then by label."""
+def for_ui(capability: Capability | None = None, include_hidden: bool = False) -> list[dict]:
+    """Rows for the frontend picker.
+
+    By default only the curated ``curation.FEATURED`` engines are returned, in
+    that list's order (top pick first). ``include_hidden=True`` returns every
+    discovered provider, sorted available-first then by label. If a step has no
+    curated engine installed, its full discovered set is shown rather than an
+    empty picker.
+    """
+    from providers import curation
+
     reg = _cache if _cache is not None else discover()
     rows: list[dict] = []
     for p in reg.values():
@@ -96,9 +105,23 @@ def for_ui(capability: Capability | None = None) -> list[dict]:
             "capability": p.info.capability.value,
             "kind": p.info.kind,
             "note": p.info.note,
+            "price": p.info.price,
             "available": ok,
             "reason": reason,
             "badge": _badge(p, ok),
         })
-    rows.sort(key=lambda r: (not r["available"], r["label"].lower()))
-    return rows
+
+    def by_label(rs: list[dict]) -> list[dict]:
+        return sorted(rs, key=lambda r: (not r["available"], r["label"].lower()))
+
+    if include_hidden:
+        return by_label(rows)
+
+    out: list[dict] = []
+    for cap in sorted({r["capability"] for r in rows}):
+        cap_rows = [r for r in rows if r["capability"] == cap]
+        order = {pid: i for i, pid in enumerate(curation.FEATURED.get(cap, []))}
+        kept = sorted((r for r in cap_rows if r["id"] in order),
+                      key=lambda r: order[r["id"]])
+        out.extend(kept if kept else by_label(cap_rows))  # never hide a whole step
+    return out

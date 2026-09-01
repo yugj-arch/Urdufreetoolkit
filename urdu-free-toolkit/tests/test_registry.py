@@ -43,4 +43,27 @@ def test_for_ui_badges():
 
 def test_for_ui_filters_by_capability():
     registry.discover(package="tests.fakes")
-    assert registry.for_ui(Capability.TRANSLATE) == []
+    rows = registry.for_ui(Capability.OCR)
+    assert rows and all(r["capability"] == "ocr" for r in rows)
+    assert "tr_fake" not in {r["id"] for r in rows}
+
+
+def test_for_ui_shows_only_curated_engines_in_order():
+    registry.discover(package="providers")
+    from providers import curation
+    for cap in Capability:
+        rows = registry.for_ui(cap)
+        ids = [r["id"] for r in rows]
+        curated_installed = [i for i in curation.FEATURED.get(cap.value, []) if i in ids]
+        if curated_installed:  # (fallback path only triggers when none are installed)
+            assert ids == curated_installed
+        for r in rows:
+            assert "price" in r
+
+
+def test_for_ui_include_hidden_is_a_superset():
+    registry.discover(package="providers")
+    shown = registry.for_ui(Capability.OCR)
+    everything = registry.for_ui(Capability.OCR, include_hidden=True)
+    assert len(everything) >= len(shown)
+    assert {r["id"] for r in shown} <= {r["id"] for r in everything}

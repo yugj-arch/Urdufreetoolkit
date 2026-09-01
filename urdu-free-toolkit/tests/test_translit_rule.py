@@ -264,3 +264,94 @@ def test_reference_sentence_devanagari_matches_gpt():
 def test_reference_sentence_has_no_perso_arabic_leaks():
     deva, roman = rule_engine.transliterate(_REF_SENTENCE)
     assert not _leaks(deva, roman)
+
+
+# ---------------------------------------------------------------------------
+# line breaks are structural -- poetry and multi-line text must keep them
+# (regression: normalize_urdu collapsed every run of whitespace, newlines
+#  included, flattening a ghazal into one paragraph)
+# ---------------------------------------------------------------------------
+
+def test_newlines_are_preserved():
+    deva, roman = rule_engine.transliterate("گھر\nہے")
+    assert deva == "घर\nहै"
+    assert roman == "ghar\nhai"
+
+
+def test_horizontal_whitespace_still_collapses_but_newlines_survive():
+    deva, roman = rule_engine.transliterate("گھر   \n   ہے")
+    assert deva == "घर\nहै" and roman == "ghar\nhai"
+
+
+# ---------------------------------------------------------------------------
+# curated vocabulary for the second GPT-4o reference (an Eid ghazal) --
+# poetic short forms (ترا/ترے) and Perso-Arabic words whose short vowels
+# the default-"a" heuristic guesses wrong
+# ---------------------------------------------------------------------------
+
+GHAZAL_VOCAB = {
+    "کہ": ("कि", "ki"),
+    "بھیج": ("भेज", "bhej"),
+    "ہلال": ("हिलाल", "hilaal"),
+    "کلید": ("कलीद", "kaleed"),
+    "سائل": ("साइल", "saail"),
+    "پھرے": ("फिरे", "phire"),
+    "ترا": ("तेरा", "tera"),
+    "تری": ("तेरी", "teri"),
+    "ترے": ("तेरे", "tere"),
+    "محروم": ("महरूम", "mahroom"),
+    "غلام": ("गुलाम", "ghulaam"),
+    "فرمادی": ("फरमादी", "farmaadi"),
+}
+
+
+@pytest.mark.parametrize("src,expected", list(GHAZAL_VOCAB.items()))
+def test_ghazal_vocab_is_exact(src, expected):
+    assert rule_engine.transliterate(src) == expected
+
+
+# ---------------------------------------------------------------------------
+# whole-ghazal parity with the GPT-4o reference column. Line breaks kept.
+# Two words are rendered to the conventional form rather than GPT's exact
+# token: کہ -> "ki" (GPT romanised "ke" but wrote कि), and مبارک ->
+# "mubaarak" (GPT used the anglicised greeting spelling "mubarak").
+# ---------------------------------------------------------------------------
+
+_GHAZAL_SRC = "\n".join([
+    "عید مبارک",
+    "وہ عید بھیج کہ لائے نوید آبادی",
+    "ہلال عید کو کر دے کلید آزادی",
+    "علی آج نہ سائل پھرے ترا محروم",
+    "ترا غلام ہو تیرے در کا فرمادی",
+])
+
+_GHAZAL_DEVA = "\n".join([
+    "ईद मुबारक",
+    "वो ईद भेज कि लाए नवेद आबादी",
+    "हिलाल ईद को कर दे कलीद आज़ादी",
+    "अली आज न साइल फिरे तेरा महरूम",
+    "तेरा गुलाम हो तेरे दर का फरमादी",
+])
+
+_GHAZAL_ROMAN = "\n".join([
+    "eid mubaarak",
+    "wo eid bhej ki laaye naveed aabaadi",
+    "hilaal eid ko kar de kaleed aazaadi",
+    "ali aaj na saail phire tera mahroom",
+    "tera ghulaam ho tere dar ka farmaadi",
+])
+
+
+def test_ghazal_devanagari_matches_gpt():
+    deva, _ = rule_engine.transliterate(_GHAZAL_SRC)
+    assert deva == _GHAZAL_DEVA
+
+
+def test_ghazal_roman_matches_gpt():
+    _, roman = rule_engine.transliterate(_GHAZAL_SRC)
+    assert roman == _GHAZAL_ROMAN
+
+
+def test_ghazal_has_no_perso_arabic_leaks():
+    deva, roman = rule_engine.transliterate(_GHAZAL_SRC)
+    assert not _leaks(deva, roman)

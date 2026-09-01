@@ -36,6 +36,7 @@ class SuryaOcr(BaseProvider):
         capability=Capability.OCR,
         kind="offline",
         note="Transformer OCR, native Urdu. Best free on Nastaliq. First run downloads ~1 GB.",
+        price="Free · offline",
     )
 
     def available(self) -> tuple[bool, str]:

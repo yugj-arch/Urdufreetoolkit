@@ -14,8 +14,16 @@ import os
 
 from PIL import Image
 
-MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
+MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-terra")  # vision; override with OPENAI_MODEL (e.g. gpt-4o)
 _MAX_IMAGE_DIM = 2048  # downscale the longer side before upload, to cap cost/latency
+
+
+def sampling_kwargs() -> dict:
+    """``temperature=0`` for models that allow it, ``{}`` for the GPT-5 /
+    reasoning family (which reject any non-default temperature)."""
+    if MODEL.lower().startswith(("gpt-5", "o1", "o3", "o4")):
+        return {}
+    return {"temperature": 0}
 
 _client = None
 

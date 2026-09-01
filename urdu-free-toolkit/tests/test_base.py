@@ -5,7 +5,7 @@ from providers.base import (
 
 def test_capability_values():
     assert Capability.OCR == "ocr"
-    assert Capability.TRANSLATE == "translate"
+    assert Capability.TRANSLIT == "translit"
 
 
 def test_result_defaults():

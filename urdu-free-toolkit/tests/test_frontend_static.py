@@ -16,5 +16,5 @@ def test_index_references_static_and_no_cdn():
 
 def test_app_js_hits_endpoints():
     js = (ROOT / "static/app.js").read_text(encoding="utf-8")
-    for ep in ("/api/providers", "/api/ocr", "/api/transliterate", "/api/render", "/api/settings"):
+    for ep in ("/api/providers", "/api/ocr", "/api/transliterate", "/api/batch", "/api/settings"):
         assert ep in js

@@ -24,6 +24,11 @@ def test_save_preserves_other_lines(tmp_path, monkeypatch):
     assert "OPENAI_API_KEY=new" in text and "old" not in text
 
 
+def test_model_override_keys_are_known():
+    assert "ANTHROPIC_MODEL" in settings.KNOWN_KEYS
+    assert "GEMINI_MODEL" in settings.KNOWN_KEYS
+
+
 def test_empty_value_removes(tmp_path, monkeypatch):
     envf = tmp_path / ".env"
     envf.write_text("OPENAI_API_KEY=old\n")

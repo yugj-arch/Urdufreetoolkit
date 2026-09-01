@@ -25,6 +25,7 @@ class RuleTranslit(BaseProvider):
         capability=Capability.TRANSLIT,
         kind="offline",
         note="Dictionary + heuristic. Free and deterministic; limited vowel restoration.",
+        price="Free · offline",
     )
 
     def translit(self, text: str, opts: TranslitOpts) -> TranslitResult:

@@ -4,9 +4,9 @@
 A *provider* is a small module under providers/<capability>/ that exposes a
 module-level ``PROVIDER`` instance (a ``BaseProvider`` subclass). It declares
 what it is via ``info`` and whether it can run right now via ``available()``,
-and implements one capability method: ``ocr`` / ``translit`` / ``translate`` /
-``render``. Failures are returned as data (``ok=False``, ``error=...``), never
-raised into a request path.
+and implements one capability method: ``ocr`` / ``translit``. Failures are
+returned as data (``ok=False``, ``error=...``), never raised into a request
+path.
 """
 from __future__ import annotations
 
@@ -18,8 +18,6 @@ from enum import Enum
 class Capability(str, Enum):
     OCR = "ocr"
     TRANSLIT = "translit"
-    TRANSLATE = "translate"
-    RENDER = "render"
 
 
 @dataclass
@@ -30,6 +28,7 @@ class ProviderInfo:
     kind: str  # "offline" | "api"
     needs: list[str] = field(default_factory=list)
     note: str = ""
+    price: str = ""  # short human string for the UI price badge, e.g. "Free · offline"
 
 
 @dataclass
@@ -55,25 +54,9 @@ class TranslitResult(Result):
 
 
 @dataclass
-class TranslateResult(Result):
-    english: str = ""
-    hindi: str = ""
-
-
-@dataclass
-class RenderResult(Result):
-    png: bytes = b""
-
-
-@dataclass
 class TranslitOpts:
     roman_style: str = "natural"
     targets: tuple[str, ...] = ("devanagari", "roman")
-
-
-@dataclass
-class TranslateOpts:
-    targets: tuple[str, ...] = ("english",)
 
 
 class BaseProvider:

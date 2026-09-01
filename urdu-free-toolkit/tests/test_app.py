@@ -64,9 +64,57 @@ def test_transliterate_returns_row(client):
     assert rows[0]["devanagari"] == "देव" and rows[0]["roman"] == "dev"
 
 
-def test_translate_stub_returns_empty(client):
-    r = client.post("/api/translate", json={"text": "میں", "providers": []})
-    assert r.get_json() == {"results": []}
+def test_batch_requires_images(client):
+    r = client.post("/api/batch", data={"ocr_providers": "fake_ok"})
+    assert r.status_code == 400
+
+
+def test_batch_requires_ocr_provider(client):
+    r = client.post(
+        "/api/batch",
+        data={"images": (io.BytesIO(_png_bytes()), "a.png"), "ocr_providers": ""},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 400
+
+
+def test_batch_streams_row_per_file_and_engine(client):
+    r = client.post(
+        "/api/batch",
+        data={
+            "images": [
+                (io.BytesIO(_png_bytes()), "a.png"),
+                (io.BytesIO(_png_bytes()), "b.png"),
+            ],
+            "ocr_providers": "fake_ok",
+            "translit_providers": "tr_fake",
+        },
+        content_type="multipart/form-data",
+    )
+    body = r.get_data(as_text=True)
+    assert "text/event-stream" in r.content_type
+    assert "a.png" in body and "b.png" in body
+    assert "salaam" in body            # OCR text from the fake
+    assert "देव" in body and "dev" in body  # transliteration from the fake
+    assert '"ocr_engine": "fake_ok"' in body
+    assert '"translit_engine": "tr_fake"' in body
+    assert '"done": true' in body
+
+
+def test_batch_ocr_only_leaves_translit_blank(client):
+    r = client.post(
+        "/api/batch",
+        data={
+            "images": (io.BytesIO(_png_bytes()), "solo.png"),
+            "ocr_providers": "fake_ok",
+            "translit_providers": "",
+        },
+        content_type="multipart/form-data",
+    )
+    body = r.get_data(as_text=True)
+    assert "solo.png" in body and "salaam" in body
+    assert '"translit_engine": ""' in body
+    assert '"done": true' in body
 
 
 def test_settings_roundtrip(client, monkeypatch, tmp_path):

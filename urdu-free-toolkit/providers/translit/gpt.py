@@ -19,11 +19,12 @@ from providers.base import (
 class GptTranslit(BaseProvider):
     info = ProviderInfo(
         id="gpt",
-        label="OpenAI GPT-4o",
+        label="OpenAI GPT",
         capability=Capability.TRANSLIT,
         kind="api",
         needs=["OPENAI_API_KEY"],
         note="Context-aware vowel restoration -- the tie-breaker.",
+        price="≈ $0.005 / run",
     )
 
     def available(self) -> tuple[bool, str]:
@@ -34,8 +35,8 @@ class GptTranslit(BaseProvider):
             client = common.get_client()
             resp = client.chat.completions.create(
                 model=common.MODEL,
-                temperature=0,
                 response_format={"type": "json_object"},
+                **common.sampling_kwargs(),
                 messages=[
                     {"role": "system", "content": common.TEXT_SYSTEM},
                     {"role": "user", "content": text},

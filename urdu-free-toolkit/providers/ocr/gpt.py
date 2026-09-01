@@ -15,11 +15,12 @@ from providers.base import BaseProvider, Capability, OcrResult, ProviderInfo
 class GptOcr(BaseProvider):
     info = ProviderInfo(
         id="gpt",
-        label="OpenAI GPT-4o vision",
+        label="OpenAI GPT vision",
         capability=Capability.OCR,
         kind="api",
         needs=["OPENAI_API_KEY"],
-        note="Best overall; restores short vowels from context. ~1-2 cents/image.",
+        note="Best overall; restores short vowels from context.",
+        price="≈ $0.012 / image",
     )
 
     def available(self) -> tuple[bool, str]:
@@ -31,8 +32,8 @@ class GptOcr(BaseProvider):
             client = common.get_client()
             resp = client.chat.completions.create(
                 model=common.MODEL,
-                temperature=0,
                 response_format={"type": "json_object"},
+                **common.sampling_kwargs(),
                 messages=[
                     {"role": "system", "content": common.VISION_SYSTEM},
                     {"role": "user", "content": [

@@ -20,7 +20,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="single" type="button">Single image</button>
     <button class="tab" data-tab="text" type="button">Paste text</button>
-    <button class="tab" data-tab="batch" type="button" disabled>Batch (soon)</button>
+    <button class="tab" data-tab="batch" type="button">Batch</button>
   </nav>
 
   <section class="panel active" id="panel-single">
@@ -50,6 +50,61 @@
     </div>
   </section>
 
+  <section class="panel" id="panel-batch">
+    <div class="card">
+      <h2>Batch — many images at once</h2>
+      <p class="dim">Queue a set of images, pick engines, and run OCR (plus optional
+        transliteration) over every file. Results land in a table you can export as CSV.</p>
+
+      <h3 class="settings-sub">OCR engines</h3>
+      <div class="engines" id="batch-ocr-engines"><p class="dim">Loading engines…</p></div>
+      <div class="quick">
+        <button type="button" class="chip" data-pick="batch-ocr:offline">All offline</button>
+        <button type="button" class="chip" data-pick="batch-ocr:recommended">Recommended</button>
+        <button type="button" class="chip" data-pick="batch-ocr:none">Clear</button>
+      </div>
+
+      <h3 class="settings-sub">Transliteration engines <span class="dim">(optional)</span></h3>
+      <div class="engines" id="batch-translit-engines"><p class="dim">Loading engines…</p></div>
+      <div class="quick">
+        <button type="button" class="chip" data-pick="batch-translit:offline">All offline</button>
+        <button type="button" class="chip" data-pick="batch-translit:recommended">Recommended</button>
+        <button type="button" class="chip" data-pick="batch-translit:none">Clear</button>
+      </div>
+      <div class="row">
+        <label>Roman style
+          <select id="batch-roman-style">
+            <option value="natural">Natural (mohabbat)</option>
+            <option value="iso">ISO 15919</option>
+            <option value="iast">IAST</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="dropzone" id="batch-dropzone">
+        <input type="file" id="batch-file-input" accept="image/*" multiple hidden>
+        <span><strong>Click or drop</strong> images (JPG / PNG) — up to 30</span>
+      </label>
+      <div id="batch-queue"><p class="dim">No images queued.</p></div>
+
+      <button id="run-batch" class="primary" type="button" disabled>Run batch</button>
+      <div id="batch-progress" class="dim" hidden></div>
+
+      <div id="batch-results" class="batch-table-wrap" hidden>
+        <table>
+          <thead>
+            <tr>
+              <th>File</th><th>OCR engine</th><th>Urdu</th><th>Translit engine</th>
+              <th>Devanagari</th><th>Roman</th><th>ms</th><th>Error</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <button id="batch-csv" class="ghost" type="button" hidden>Download CSV</button>
+      </div>
+    </div>
+  </section>
+
   <div class="card" id="translit-card" hidden>
     <h2>2. Transliterate — Urdu to Devanagari + Roman</h2>
     <p class="dim">Edit the Urdu below if an OCR engine misread it, then pick transliteration engines.</p>
@@ -73,38 +128,6 @@
     <div class="columns" id="translit-columns"></div>
   </div>
 
-  <div class="card" id="translate-card" hidden>
-    <h2>3. Translate — Urdu meaning (optional)</h2>
-    <p class="dim">Transliteration keeps the sound; translation gives the meaning in English or Hindi.</p>
-    <div class="engines" id="translate-engines"></div>
-    <div class="quick">
-      <button type="button" class="chip" data-pick="translate:offline">All offline</button>
-      <button type="button" class="chip" data-pick="translate:recommended">Recommended</button>
-      <button type="button" class="chip" data-pick="translate:none">Clear</button>
-    </div>
-    <div class="row">
-      <label><input type="checkbox" id="tgt-english" checked> English</label>
-      <label><input type="checkbox" id="tgt-hindi"> Hindi</label>
-      <button id="run-translate" class="primary" type="button">Run translation</button>
-    </div>
-    <div class="columns" id="translate-columns"></div>
-  </div>
-
-  <div class="card" id="render-card" hidden>
-    <h2>4. Redraw the image (optional)</h2>
-    <p class="dim">Erase the Urdu in the uploaded image and paint a transliteration where it was.
-      Run a transliteration first — the redraw uses that text.</p>
-    <div class="row">
-      <label>Engine <select id="render-provider"></select></label>
-      <label><input type="radio" name="render-script" value="roman" checked> Roman</label>
-      <label><input type="radio" name="render-script" value="devanagari"> Devanagari</label>
-      <button id="run-render" class="primary" type="button">Generate</button>
-    </div>
-    <div id="render-status" class="dim" hidden></div>
-    <img id="rendered" alt="" hidden>
-    <a id="download-render" download="urdu-redrawn.png" hidden>Download PNG</a>
-  </div>
-
   <footer>Offline engines run entirely on this machine. API engines send your image or text to that provider.</footer>
 </div>
 
@@ -120,6 +143,10 @@
       <button id="close-settings" class="ghost" type="button">Close</button>
     </div>
     <div id="settings-status" class="dim"></div>
+    <h3 class="settings-sub">Engines &amp; pricing</h3>
+    <p class="dim">Rough per-call cost. Offline engines run on this machine for free;
+      API estimates assume one short image or line and drift with provider pricing.</p>
+    <div id="settings-engines"></div>
   </div>
 </div>
 

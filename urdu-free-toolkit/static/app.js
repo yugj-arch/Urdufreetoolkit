@@ -2,7 +2,7 @@
    GET  /api/providers        -> engine lists per capability
    POST /api/ocr              -> SSE stream, one row per engine
    POST /api/transliterate    -> {results:[...]}
-   POST /api/render           -> image/png
+   POST /api/batch            -> SSE stream, one row per (file x ocr x translit)
    GET/POST /api/settings     -> API-key status / save
 */
 "use strict";
@@ -11,15 +11,15 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
 const RECOMMENDED = {
-  ocr: ["surya", "easyocr", "rapidocr"],
-  translit: ["aksharamukha", "uroman", "rule"],
-  translate: ["nllb", "argos", "deep_translator"],
+  ocr: ["gpt", "gcv"],
+  translit: ["gpt", "rule", "aksharamukha"],
 };
 
 const state = {
   file: null,
-  providers: { ocr: [], translit: [], translate: [], render: [] },
-  lastTranslit: [], // rows from the most recent /api/transliterate run
+  providers: { ocr: [], translit: [] },
+  batchFiles: [], // File[] queued in the Batch tab
+  batchRows: [],  // accumulated result rows, for the CSV download
 };
 
 /* ---------- boot ---------- */
@@ -27,10 +27,9 @@ document.addEventListener("DOMContentLoaded", () => {
   wireTabs();
   wireDropzone();
   wireSettings();
+  wireBatch();
   $("#run-ocr").addEventListener("click", runOcr);
   $("#run-translit").addEventListener("click", runTranslit);
-  $("#run-translate").addEventListener("click", runTranslate);
-  $("#run-render").addEventListener("click", runRender);
   $("#use-paste").addEventListener("click", usePaste);
   $$("[data-pick]").forEach((b) => b.addEventListener("click", () => pick(b.dataset.pick)));
   loadProviders();
@@ -57,11 +56,14 @@ async function loadProviders() {
   }
   renderEngineList("ocr", "#ocr-engines");
   renderEngineList("translit", "#translit-engines");
-  renderEngineList("translate", "#translate-engines");
-  renderRenderSelect();
+  renderEngineList("ocr", "#batch-ocr-engines", "batch-ocr");
+  renderEngineList("translit", "#batch-translit-engines", "batch-translit");
 }
 
-function renderEngineList(cap, sel) {
+/* `capAttr` overrides the value written to each checkbox's data-cap — the Batch
+   tab passes "batch-ocr" / "batch-translit" so its picks stay separate from the
+   single-image pickers that share the same `cap`. */
+function renderEngineList(cap, sel, capAttr = cap) {
   const box = $(sel);
   const rows = state.providers[cap] || [];
   if (!rows.length) { box.innerHTML = '<p class="dim">No engines found for this step.</p>'; return; }
@@ -70,9 +72,10 @@ function renderEngineList(cap, sel) {
     const off = r.available ? "" : "off";
     const reason = r.available ? "" : ` title="${esc(r.reason || "unavailable")}"`;
     return `<label class="eng ${off}"${reason}>
-      <input type="checkbox" value="${esc(r.id)}" data-cap="${cap}" ${dis}>
+      <input type="checkbox" value="${esc(r.id)}" data-cap="${capAttr}" ${dis}>
       <span>
         <span class="lbl">${esc(r.label)}</span><span class="badge-tag">${esc(r.badge)}</span>
+        ${r.price ? `<span class="price-tag">${esc(r.price)}</span>` : ""}
         ${r.note ? `<span class="note">${esc(r.note)}</span>` : ""}
         ${r.available ? "" : `<span class="note">${esc(r.reason || "")}</span>`}
       </span>
@@ -80,14 +83,19 @@ function renderEngineList(cap, sel) {
   }).join("");
 }
 
-function renderRenderSelect() {
-  const s = $("#render-provider");
-  const rows = (state.providers.render || []).filter((r) => r.available);
-  if (!rows.length) {
-    s.innerHTML = '<option value="">none available</option>';
-    return;
-  }
-  s.innerHTML = rows.map((r) => `<option value="${esc(r.id)}">${esc(r.label)}</option>`).join("");
+/* Read-only "what each engine costs" table inside the Settings modal. */
+function renderSettingsEngines() {
+  const box = $("#settings-engines");
+  if (!box) return;
+  const groups = [["ocr", "OCR"], ["translit", "Transliterate"]];
+  box.innerHTML = groups.map(([cap, title]) => {
+    const rows = state.providers[cap] || [];
+    if (!rows.length) return "";
+    return `<div class="eng-price-group"><strong>${esc(title)}</strong>` +
+      rows.map((r) => `<div class="eng-price-row"><span>${esc(r.label)}</span>` +
+        `<span class="price-tag">${esc(r.price || "—")}</span></div>`).join("") +
+      `</div>`;
+  }).join("");
 }
 
 function checkedIds(cap) {
@@ -96,15 +104,16 @@ function checkedIds(cap) {
 
 function pick(spec) {
   const [cap, what] = spec.split(":");
+  const baseCap = cap.replace(/^batch-/, ""); // "batch-ocr" -> "ocr" for the lookups below
   const boxes = $$(`input[data-cap="${cap}"]`);
   boxes.forEach((b) => {
     if (b.disabled) { b.checked = false; return; }
     if (what === "none") b.checked = false;
     else if (what === "offline") {
-      const row = (state.providers[cap] || []).find((r) => r.id === b.value);
+      const row = (state.providers[baseCap] || []).find((r) => r.id === b.value);
       b.checked = !!row && row.badge === "offline";
     } else if (what === "recommended") {
-      b.checked = (RECOMMENDED[cap] || []).includes(b.value);
+      b.checked = (RECOMMENDED[baseCap] || []).includes(b.value);
     }
   });
 }
@@ -224,60 +233,7 @@ function fillOcrCol(row) {
 /* ---------- transliteration ---------- */
 function revealTranslit(scroll) {
   $("#translit-card").hidden = false;
-  $("#translate-card").hidden = false;
-  if (state.file) $("#render-card").hidden = false;
   if (scroll) $("#translit-card").scrollIntoView({ behavior: "smooth" });
-}
-
-async function runTranslate() {
-  const text = $("#urdu-input").value.trim();
-  const ids = checkedIds("translate");
-  if (!text) return alert("Nothing to translate.");
-  if (!ids.length) return alert("Tick at least one translation engine.");
-  const targets = [];
-  if ($("#tgt-english").checked) targets.push("english");
-  if ($("#tgt-hindi").checked) targets.push("hindi");
-  if (!targets.length) return alert("Pick English or Hindi.");
-
-  const cols = $("#translate-columns");
-  cols.innerHTML = ids.map((id) =>
-    `<div class="col" data-pid="${esc(id)}"><h3><span>${esc(labelFor("translate", id))}</span>` +
-    `<span class="ms">…</span></h3><div class="running">running… (first run downloads a model)</div></div>`).join("");
-  $("#run-translate").disabled = true;
-
-  try {
-    const res = await fetch("/api/translate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, providers: ids, targets }),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    for (const row of data.results || []) fillTranslateCol(row);
-  } catch (e) {
-    alert("Translation failed: " + e.message);
-  } finally {
-    $("#run-translate").disabled = false;
-  }
-}
-
-function fillTranslateCol(row) {
-  const el = $(`#translate-columns .col[data-pid="${cssEsc(row.provider_id)}"]`);
-  if (!el) return;
-  const head = el.querySelector("h3").outerHTML.replace(">…<", ">" + (row.ms ?? "") + " ms<");
-  if (!row.ok) { el.innerHTML = head + `<div class="err">${esc(row.error || "failed")}</div>`; return; }
-  el.innerHTML = head;
-  if (row.english) {
-    el.appendChild(elWith("div", "lab", "English"));
-    el.appendChild(outBlock(row.english, false));
-    el.appendChild(copyBtn(row.english));
-  }
-  if (row.hindi) {
-    el.appendChild(elWith("div", "lab", "Hindi"));
-    el.appendChild(outBlock(row.hindi, false));
-    el.appendChild(copyBtn(row.hindi));
-  }
-  if (!row.english && !row.hindi) el.appendChild(elWith("div", "running", "no output"));
 }
 
 async function runTranslit() {
@@ -300,8 +256,7 @@ async function runTranslit() {
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    state.lastTranslit = data.results || [];
-    for (const row of state.lastTranslit) fillTranslitCol(row);
+    for (const row of data.results || []) fillTranslitCol(row);
   } catch (e) {
     alert("Transliteration failed: " + e.message);
   } finally {
@@ -323,54 +278,145 @@ function fillTranslitCol(row) {
   el.appendChild(copyBtn(row.roman || ""));
 }
 
-/* ---------- render ---------- */
-async function runRender() {
-  if (!state.file) return alert("Redraw needs the image you ran OCR on.");
-  const pid = $("#render-provider").value;
-  if (!pid) return alert("No redraw engine is available.");
-  const script = $('input[name="render-script"]:checked').value;
-  const ok = state.lastTranslit.find((r) => r.ok && (script === "roman" ? r.roman : r.devanagari));
-  if (!ok) return alert("Run a transliteration first — the redraw uses that text.");
-  const lines = script === "roman" ? ok.roman : ok.devanagari;
-
-  const status = $("#render-status");
-  status.hidden = false; status.textContent = "redrawing… this can take a while for AI engines.";
-  $("#run-render").disabled = true;
-  $("#rendered").hidden = true;
-  $("#download-render").hidden = true;
-
-  try {
-    const fd = new FormData();
-    fd.append("image", state.file);
-    fd.append("provider", pid);
-    fd.append("lines", lines);
-    const res = await fetch("/api/render", { method: "POST", body: fd });
-    if (!res.ok) {
-      let msg = res.statusText;
-      try { msg = (await res.json()).error || msg; } catch (e) {}
-      throw new Error(msg);
-    }
-    const url = URL.createObjectURL(await res.blob());
-    const img = $("#rendered");
-    img.src = url; img.hidden = false;
-    const dl = $("#download-render");
-    dl.href = url; dl.download = "urdu-" + script + ".png"; dl.hidden = false;
-    status.hidden = true;
-  } catch (e) {
-    status.textContent = "Redraw failed: " + e.message;
-  } finally {
-    $("#run-render").disabled = false;
-  }
-}
-
 /* ---------- paste text ---------- */
 function usePaste() {
   const t = $("#paste-box").value.trim();
   if (!t) return;
   $("#urdu-input").value = t;
   state.file = null;
-  $("#render-card").hidden = true; // no source image to redraw
   revealTranslit(true);
+}
+
+/* ---------- batch (SSE) ---------- */
+function wireBatch() {
+  const input = $("#batch-file-input");
+  input.addEventListener("change", () => { addBatchFiles(input.files); input.value = ""; });
+  const dz = $("#batch-dropzone");
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault(); dz.classList.remove("drag");
+    addBatchFiles(e.dataTransfer.files);
+  });
+  $("#run-batch").addEventListener("click", runBatch);
+  $("#batch-csv").addEventListener("click", downloadBatchCsv);
+}
+
+const BATCH_MAX_FILES = 30;
+
+function addBatchFiles(fileList) {
+  for (const f of fileList) {
+    if (!f.type.startsWith("image/")) continue;
+    if (state.batchFiles.length >= BATCH_MAX_FILES) break;
+    if (state.batchFiles.some((x) => x.name === f.name && x.size === f.size)) continue;
+    state.batchFiles.push(f);
+  }
+  renderBatchQueue();
+}
+
+function renderBatchQueue() {
+  const box = $("#batch-queue");
+  const n = state.batchFiles.length;
+  $("#run-batch").disabled = n === 0;
+  if (!n) { box.innerHTML = '<p class="dim">No images queued.</p>'; return; }
+  box.innerHTML =
+    `<p class="dim">${n} image${n === 1 ? "" : "s"} queued` +
+    (n >= BATCH_MAX_FILES ? ` (max ${BATCH_MAX_FILES})` : "") + `</p>` +
+    state.batchFiles.map((f, i) =>
+      `<div class="batch-file"><span>${esc(f.name)}</span>` +
+      `<button type="button" data-rm="${i}">&times;</button></div>`).join("");
+  $$("#batch-queue [data-rm]").forEach((b) => b.addEventListener("click", () => {
+    state.batchFiles.splice(Number(b.dataset.rm), 1);
+    renderBatchQueue();
+  }));
+}
+
+async function runBatch() {
+  const ocrIds = checkedIds("batch-ocr");
+  const trIds = checkedIds("batch-translit");
+  if (!state.batchFiles.length) return alert("Queue at least one image.");
+  if (!ocrIds.length) return alert("Tick at least one OCR engine.");
+
+  const tbody = $("#batch-results tbody");
+  tbody.innerHTML = "";
+  state.batchRows = [];
+  $("#batch-results").hidden = false;
+  $("#batch-csv").hidden = true;
+  $("#run-batch").disabled = true;
+  const prog = $("#batch-progress");
+  prog.hidden = false;
+  prog.textContent = `Processing 0 / ${state.batchFiles.length}…`;
+
+  try {
+    const fd = new FormData();
+    state.batchFiles.forEach((f) => fd.append("images", f, f.name));
+    fd.append("ocr_providers", ocrIds.join(","));
+    fd.append("translit_providers", trIds.join(","));
+    fd.append("roman_style", $("#batch-roman-style").value);
+    const res = await fetch("/api/batch", { method: "POST", body: fd });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try { msg = (await res.json()).error || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data:")) continue;
+        const payload = JSON.parse(line.slice(5).trim());
+        if (payload.done) continue;
+        if (payload.progress) {
+          prog.textContent = `Processing ${payload.progress} / ${payload.total}…`;
+          continue;
+        }
+        addBatchRow(payload);
+      }
+    }
+    prog.textContent = `Done — ${state.batchRows.length} row${state.batchRows.length === 1 ? "" : "s"}.`;
+    $("#batch-csv").hidden = state.batchRows.length === 0;
+  } catch (e) {
+    prog.textContent = "Batch failed: " + e.message;
+  } finally {
+    $("#run-batch").disabled = false;
+  }
+}
+
+const BATCH_COLS = ["file", "ocr_engine", "urdu", "translit_engine", "devanagari", "roman", "ms", "error"];
+
+function addBatchRow(row) {
+  state.batchRows.push(row);
+  const tr = document.createElement("tr");
+  tr.innerHTML = BATCH_COLS.map((c) => {
+    const v = row[c] == null ? "" : String(row[c]);
+    const rtl = (c === "urdu" || c === "devanagari") ? ' dir="rtl"' : "";
+    const cls = c === "error" && v ? ' class="err"' : "";
+    return `<td${rtl}${cls}>${esc(v)}</td>`;
+  }).join("");
+  $("#batch-results tbody").appendChild(tr);
+}
+
+function downloadBatchCsv() {
+  const cell = (v) => {
+    const s = v == null ? "" : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [BATCH_COLS.join(",")];
+  for (const r of state.batchRows) lines.push(BATCH_COLS.map((c) => cell(r[c])).join(","));
+  // BOM so Excel reads the Urdu/Devanagari columns as UTF-8
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "urdu-batch.csv";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 /* ---------- settings ---------- */
@@ -383,6 +429,8 @@ function wireSettings() {
        <input type="${k.endsWith("KEY") ? "password" : "text"}" data-key="${esc(k)}"
               placeholder="${status[k] ? "leave blank to keep" : ""}">`).join("");
     $("#settings-status").textContent = "";
+    if (!state.providers.ocr.length) await loadProviders();
+    renderSettingsEngines();
     modal.hidden = false;
   });
   $("#close-settings").addEventListener("click", () => (modal.hidden = true));
@@ -400,6 +448,7 @@ function wireSettings() {
     const data = await res.json();
     $("#settings-status").textContent = "Saved: " + (data.saved || []).join(", ");
     await loadProviders();
+    renderSettingsEngines();
     setTimeout(() => (modal.hidden = true), 700);
   });
 }
