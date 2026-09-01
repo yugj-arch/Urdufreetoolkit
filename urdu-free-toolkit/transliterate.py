@@ -192,7 +192,7 @@ _RAW_COMMON_WORDS: dict[str, tuple[str, str]] = {
     "فلاحی": ("फ़लाही", "falaahi"),
     "آزادی": ("आज़ादी", "aazaadi"),
     "آبادی": ("आबादी", "aabaadi"),
-    "نوید": ("नवेद", "naved"),
+    "نوید": ("नवेद", "naveed"),
     "جسے": ("जिसे", "jise"),
     "لائے": ("लाए", "laaye"),
     "ملائے": ("मिलाए", "milaaye"),
@@ -240,6 +240,24 @@ _RAW_COMMON_WORDS: dict[str, tuple[str, str]] = {
     "شعر": ("शेर", "sher"),
     "بعد": ("बाद", "baad"),
     "شروع": ("शुरू", "shuru"),
+    # --- Eid-ghazal vocabulary: poetic ی-less short forms (ترا/ترے) and
+    #     Perso-Arabic words whose unwritten short vowels the heuristic misses
+    "کہ": ("कि", "ki"),
+    "بھیج": ("भेज", "bhej"),
+    "بھیجو": ("भेजो", "bhejo"),
+    "ہلال": ("हिलाल", "hilaal"),
+    "کلید": ("कलीद", "kaleed"),
+    "سائل": ("साइल", "saail"),
+    "پھرے": ("फिरे", "phire"),
+    "پھرا": ("फिरा", "phira"),
+    "پھری": ("फिरी", "phiri"),
+    "ترا": ("तेरा", "tera"),
+    "تری": ("तेरी", "teri"),
+    "ترے": ("तेरे", "tere"),
+    "محروم": ("महरूम", "mahroom"),
+    "غلام": ("गुलाम", "ghulaam"),
+    "غلاموں": ("गुलामों", "ghulaamon"),
+    "فرمادی": ("फरमादी", "farmaadi"),
 }
 
 # ---------------------------------------------------------------------------
@@ -368,10 +386,15 @@ def _render_punct(marks: str, devanagari: bool) -> str:
 
 def normalize_urdu(text: str) -> str:
     """Unicode-normalize, fold Arabic/Urdu letter variants to their standard
-    Urdu form, strip kashida, ASCII-ify digits (free, deterministic)."""
+    Urdu form, strip kashida, ASCII-ify digits (free, deterministic).
+
+    Line breaks are structural (poetry, stanzas, OCR line output), so
+    only horizontal whitespace is collapsed -- newlines are kept, with
+    any spaces hugging them trimmed."""
     text = _fold_chars(unicodedata.normalize("NFC", text))
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    text = re.sub(r"[^\S\n]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    return text.strip()
 
 
 def _delete_roman_schwas(segs):
@@ -549,23 +572,35 @@ def _load_lexicon(path=_LEXICON_PATH) -> dict[str, tuple[str, str]]:
 _LEXICON = _load_lexicon()
 
 
-def transliterate_word(word: str):
+def transliterate_word_with(oov_fn, word: str):
+    """Curated dictionary and bundled lexicon first (both exact); only a token
+    that misses both is handed to ``oov_fn`` -- the pluggable out-of-vocabulary
+    fallback. ``oov_fn(word) -> (devanagari, roman)``."""
     if word in COMMON_WORDS:       # curated: always wins
         return COMMON_WORDS[word]
     if word in _LEXICON:           # bundled breadth layer
         return _LEXICON[word]
-    return _transliterate_word_rule_based(word)
+    return oov_fn(word)
 
 
-def transliterate(text: str):
-    """Main entry point. Returns (devanagari_text, roman_text)."""
+def transliterate_word(word: str):
+    return transliterate_word_with(_transliterate_word_rule_based, word)
+
+
+def transliterate_with(oov_fn, text: str):
+    """Same pipeline as :func:`transliterate` (normalize -> tokenize -> curated
+    dict -> lexicon -> fallback -> per-script punctuation), but the
+    out-of-vocabulary word fallback is pluggable. The Aksharamukha provider
+    passes an Aksharamukha-backed ``oov_fn`` here instead of the built-in
+    character rules, while keeping the shared curated/lexicon/punctuation
+    layers identical to the rule engine."""
     text = normalize_urdu(text)
     deva_parts, roman_parts = [], []
     for token in WORD_RE.findall(text):
         if re.match(r"[\u0600-\u06FF]+", token):
             prefix, core, suffix = _split_leading_trailing_punct(token)
             if core:
-                d, r = transliterate_word(core)
+                d, r = transliterate_word_with(oov_fn, core)
             else:
                 d, r = "", ""
             deva_parts.append(_render_punct(prefix, True) + d
@@ -576,6 +611,11 @@ def transliterate(text: str):
             deva_parts.append(token)
             roman_parts.append(token)
     return "".join(deva_parts), "".join(roman_parts)
+
+
+def transliterate(text: str):
+    """Main entry point. Returns (devanagari_text, roman_text)."""
+    return transliterate_with(_transliterate_word_rule_based, text)
 
 
 # ---------------------------------------------------------------------------
