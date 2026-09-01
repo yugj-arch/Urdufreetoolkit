@@ -28,6 +28,14 @@ rapidocr-onnxruntime    # ONNX, torch-free (Latin/CJK models by default)
 python-doctr[torch]     # Latin-trained; low Urdu accuracy
 transformers            # TrOCR / HF checkpoints (set HF_TROCR_CKPT for Urdu)
 pytesseract             # needs the Tesseract binary + urd data installed separately
+opencv-python-headless  # OCR pipeline preprocessing (grayscale, deskew, CLAHE, binarize, upscale)
+Levenshtein             # OCR normalize spellfix + eval CER/WER scoring
+# scikit-image          # Sauvola binarization; pipeline falls back to cv2.adaptiveThreshold without it
+
+# --- OCR fine-tuning tooling (Phase 2, CPU side; training itself is a GPU runbook) ---
+rapidfuzz               # GPT-distillation line alignment
+fonttools               # synthetic renderer font handling
+# Pillow (core) needs libraqm at runtime for Arabic shaping in training/synth/render.py
 
 # --- transliteration (offline) ---
 aksharamukha            # script mapping; best with harakat
@@ -35,13 +43,8 @@ uroman                  # universal romanizer (Roman only, no vowel restoration)
 # PyICU                 # ICU Arabic-Latin transform — needs prebuilt wheel / ICU dev libs;
                         #   skipped by default because it has no Windows/py3.13 wheel
 
-# --- translation (offline / free) ---
-argostranslate          # small offline NMT (downloads ur->en on first use)
-deep-translator         # free Google endpoint, no key, needs internet
-# NLLB-200 / M2M100 run through `transformers` (already listed above)
-
-# --- render (offline) ---
-opencv-python-headless  # cv2.inpaint erase for the opencv_inpaint redraw
-
 # --- API providers (optional; keys entered in Settings) ---
-# openai already listed above (GPT-4o OCR / transliteration / gpt-image-1 redraw)
+# openai already listed above (GPT vision OCR / transliteration)
+anthropic>=0.40.0       # Claude vision OCR / transliteration
+google-genai            # Gemini OCR / transliteration (free-tier key)
+groq                    # Groq Llama 3.3 70B transliteration (free-tier key)

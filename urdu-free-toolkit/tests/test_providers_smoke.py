@@ -11,7 +11,7 @@ import pytest
 from PIL import Image
 
 from providers import registry
-from providers.base import Capability, TranslateOpts, TranslitOpts
+from providers.base import Capability, TranslitOpts
 
 
 def _png() -> bytes:
@@ -44,7 +44,8 @@ def test_every_provider_has_valid_info_and_available():
 def test_for_ui_rows_are_serializable(cap):
     rows = registry.for_ui(cap)
     for r in rows:
-        assert set(r) >= {"id", "label", "capability", "kind", "badge", "available", "reason", "note"}
+        assert set(r) >= {"id", "label", "capability", "kind", "badge",
+                          "available", "reason", "note", "price"}
 
 
 def test_offline_translit_providers_do_not_crash():
@@ -57,3 +58,22 @@ def test_offline_translit_providers_do_not_crash():
         r = p.translit("میں ٹھیک ہوں", TranslitOpts())
         assert r.provider_id == p.info.id
         assert isinstance(r.ok, bool)
+
+
+def test_offline_ocr_providers_emit_translit_meta(monkeypatch):
+    """paddle / easyocr, with their engine calls faked, return an OcrResult
+    carrying meta['devanagari'] / meta['roman'] / meta['reading_order']."""
+    from providers.ocr._types import Word
+    import providers.ocr.easyocr_p as e
+    import providers.ocr.paddle as p
+
+    word = [Word("ہے", [(0, 0), (20, 0), (20, 14), (0, 14)], 0.9)]
+    monkeypatch.setattr(e, "easyocr", object())          # pass the availability gate
+    monkeypatch.setattr(e, "_recognize", lambda img, cfg: list(word))
+    monkeypatch.setattr(p, "PaddleOCR", object())
+    monkeypatch.setattr(p, "_recognize", lambda img, cfg: list(word))
+
+    for prov in (e.PROVIDER, p.PROVIDER):
+        r = prov.ocr(_png())
+        assert r.ok is True
+        assert {"devanagari", "roman", "reading_order"} <= set(r.meta)
