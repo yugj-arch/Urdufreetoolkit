@@ -1,6 +1,7 @@
-# Keep the heavy local dependency set out of the serverless build.
-# Vercel installs from pyproject.toml instead (cloud engines only).
-requirements.txt
+# Keep the full local dependency set out of the serverless build.
+# Vercel installs from api/requirements.txt instead (cloud engines only).
+# Anchored to the project root so api/requirements.txt is NOT matched.
+/requirements.txt
 
 # Not needed at runtime on the deployed site
 tests/

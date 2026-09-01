@@ -13,9 +13,10 @@ can't hold PyTorch/PaddleOCR.
 | OCR | GPT vision, Claude vision, Gemini vision, Google Cloud Vision | EasyOCR, PaddleOCR, Surya, … (show as "not installed") |
 | Transliteration | GPT, Groq, Rule engine, Aksharamukha, uroman | ICU |
 
-Dependencies come from **`pyproject.toml`** (the cloud set). `requirements.txt`
-stays the full local set and is hidden from the build by `.vercelignore` — it is
-never touched.
+Structure Vercel sees: **`api/index.py`** re-exports the Flask `app`, and
+`vercel.json` rewrites every route to it. Dependencies come from
+**`api/requirements.txt`** (the cloud set). The repo's `requirements.txt` stays
+the full local set and is hidden from the build by `.vercelignore` — never touched.
 
 ## One-time setup (Vercel dashboard)
 
@@ -28,8 +29,9 @@ never touched.
    Pushing the branch alone gets you a **preview URL**; merging to the production
    branch updates the live site.
 2. [vercel.com/new](https://vercel.com/new) → **Import** this Git repo.
-3. **Root Directory** → click *Edit* → choose **`urdu-free-toolkit`**. (Vercel
-   then auto-detects Flask from `app.py`; leave Framework Preset alone.)
+3. **Root Directory** → click *Edit* → choose **`urdu-free-toolkit`**. Leave
+   Framework Preset as *Other* and the Build/Install commands blank — `vercel.json`
+   + `api/index.py` handle it.
 4. **Environment Variables** → add the keys you want live (see `.env.example`):
    `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_VISION_KEY`,
    `GROQ_API_KEY`, plus any `*_MODEL` overrides. Every key is optional.

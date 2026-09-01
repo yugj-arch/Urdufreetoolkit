@@ -112,27 +112,36 @@ def test_api_settings_post_reports_readonly_on_vercel(client, tmp_path, monkeypa
 # --------------------------------------------------------------------------- #
 # deployment config files                                                     #
 # --------------------------------------------------------------------------- #
-def test_vercel_json_declares_flask_function_duration():
+def test_vercel_json_routes_everything_to_the_flask_entrypoint():
     cfg = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
-    assert cfg["functions"]["app.py"]["maxDuration"] >= 60
+    assert cfg["functions"]["api/index.py"]["maxDuration"] >= 60
+    dests = {r["destination"] for r in cfg["rewrites"]}
+    assert "/api/index" in dests
+    assert any(r["source"] == "/(.*)" for r in cfg["rewrites"])
 
 
-def test_pyproject_carries_minimal_runtime_deps():
-    import tomllib
-    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    deps = " ".join(data["project"]["dependencies"]).lower()
+def test_api_index_reexports_the_flask_app():
+    src = (ROOT / "api" / "index.py").read_text(encoding="utf-8")
+    assert "from app import app" in src
+
+
+def test_api_requirements_is_the_minimal_deploy_set():
+    req = (ROOT / "api" / "requirements.txt").read_text(encoding="utf-8").lower()
     for pkg in ("flask", "pillow", "openai", "python-dotenv"):
-        assert pkg in deps, f"{pkg} missing from pyproject deps"
+        assert pkg in req, f"{pkg} missing from api/requirements.txt"
     # heavy offline engines must NOT be pulled into the serverless bundle
     for heavy in ("torch", "easyocr", "surya", "paddle", "transformers"):
-        assert heavy not in deps, f"{heavy} would blow the 250 MB function limit"
-    assert data["tool"]["vercel"]["entrypoint"] == "app:app"
+        assert heavy not in req, f"{heavy} would blow the 250 MB function limit"
 
 
-def test_vercelignore_excludes_the_heavy_requirements_file():
+def test_root_requirements_is_left_untouched_and_hidden_from_the_build():
+    # the user's full local requirements.txt keeps the heavy engines...
+    root_req = (ROOT / "requirements.txt").read_text(encoding="utf-8").lower()
+    assert "easyocr" in root_req and "surya-ocr" in root_req
+    # ...and .vercelignore keeps it out of the Vercel build (anchored to root)
     lines = {ln.strip() for ln in (ROOT / ".vercelignore").read_text(encoding="utf-8").splitlines()}
-    assert "requirements.txt" in lines
-    assert "tests/" in lines or "tests" in lines
+    assert "/requirements.txt" in lines
+    assert "tests/" in lines
 
 
 def test_env_example_lists_the_provider_keys():

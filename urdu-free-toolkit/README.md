@@ -86,8 +86,9 @@ project's environment variables and it just shows which are set.
 
 `git push` → live site, cloud engines only. One-time dashboard setup (import the
 repo, Root Directory = `urdu-free-toolkit`, add keys) is in **[DEPLOY.md](DEPLOY.md)**.
-`requirements.txt` is left untouched; Vercel installs the trimmed set from
-`pyproject.toml` (`.vercelignore` hides `requirements.txt` from the build).
+`api/index.py` re-exports the Flask app; `requirements.txt` is left untouched and
+Vercel installs the trimmed set from `api/requirements.txt` (`.vercelignore`
+hides the root `requirements.txt` from the build).
 
 ## Honest limitations
 
@@ -115,7 +116,8 @@ config.py              where-am-I-running switches (Vercel: batch cap, read-only
 runner.py              run N providers in parallel (+ SSE stream), per-provider timeout
 settings.py            read/write API keys to .env
 transliterate.py       the offline rule-based transliteration engine
-vercel.json / pyproject.toml / .vercelignore   deploy config — see DEPLOY.md
+api/index.py           Vercel entrypoint — re-exports the Flask app
+vercel.json / api/requirements.txt / .vercelignore   deploy config — see DEPLOY.md
 providers/
   base.py              Capability enum, Result dataclasses, BaseProvider (+ price)
   registry.py          discovery + availability + UI metadata
