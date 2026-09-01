@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""uroman as a transliteration provider (offline, Roman only).
+"""uroman as a transliteration provider (offline).
 
-uroman is a universal romanizer. It maps the Urdu letters faithfully but does
-not invent the short vowels Urdu omits, so ``محبت`` comes out ``mhbt`` rather
-than ``mohabbat``. Useful as a deterministic consonant-skeleton reference in the
-compare view. It produces no Devanagari.
+uroman is a universal romanizer with no short-vowel restoration (``mhbt``, not
+``mohabbat``). This provider keeps that skeleton reading for out-of-vocabulary
+words but runs every token through the shared curated dictionary + per-script
+punctuation layer, so on clean text the output matches the GPT compare column
+in both scripts. Devanagari for OOV words comes from the rule engine, since
+uroman produces none. See ``_uroman_engine``.
 """
 from __future__ import annotations
 
@@ -15,13 +17,7 @@ from providers.base import (
     TranslitOpts,
     TranslitResult,
 )
-
-try:
-    import uroman as _uroman_mod
-
-    _UR = _uroman_mod.Uroman()
-except Exception:  # noqa: BLE001
-    _UR = None
+from providers.translit import _uroman_engine as engine
 
 
 class UromanTranslit(BaseProvider):
@@ -30,22 +26,25 @@ class UromanTranslit(BaseProvider):
         label="uroman (offline)",
         capability=Capability.TRANSLIT,
         kind="offline",
-        note="Universal romanizer. Roman only, no vowel restoration (mhbt, not mohabbat).",
+        note="Universal romanizer + shared curated dictionary. Matches GPT on "
+             "clean text; raw consonant skeleton (mhbt) on rare words.",
+        price="Free · offline",
     )
 
     def available(self) -> tuple[bool, str]:
-        return (True, "") if _UR is not None else (False, "pip install uroman")
+        return (True, "") if engine._UR is not None else (False, "pip install uroman")
 
     def translit(self, text: str, opts: TranslitOpts) -> TranslitResult:
-        if _UR is None:
+        if engine._UR is None:
             return TranslitResult(provider_id=self.info.id, ok=False,
                                   error="uroman not installed")
-        t = self._timed(_UR.romanize_string, text)
+        t = self._timed(engine.transliterate, text)
         if not t["ok"]:
             return TranslitResult(provider_id=self.info.id, ok=False,
                                   error=t["error"], ms=t["ms"])
+        deva, roman = t["value"]
         return TranslitResult(provider_id=self.info.id, ok=True, ms=t["ms"],
-                              devanagari="", roman=(t["value"] or "").strip())
+                              devanagari=deva, roman=roman)
 
 
 PROVIDER = UromanTranslit()

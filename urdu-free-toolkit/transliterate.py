@@ -240,6 +240,15 @@ _RAW_COMMON_WORDS: dict[str, tuple[str, str]] = {
     "شعر": ("शेर", "sher"),
     "بعد": ("बाद", "baad"),
     "شروع": ("शुरू", "shuru"),
+    # high-frequency function words in the reference sentences: the rule
+    # heuristic happens to romanise these right, but uroman skeletonises them
+    # (jw/tk/kr) -- curating them makes every engine agree with GPT.
+    "جو": ("जो", "jo"),
+    "تک": ("तक", "tak"),
+    "لے": ("ले", "le"),
+    "دے": ("दे", "de"),
+    "کر": ("कर", "kar"),
+    "جانے": ("जाने", "jaane"),
     # --- Eid-ghazal vocabulary: poetic ی-less short forms (ترا/ترے) and
     #     Perso-Arabic words whose unwritten short vowels the heuristic misses
     "کہ": ("कि", "ki"),
@@ -258,6 +267,9 @@ _RAW_COMMON_WORDS: dict[str, tuple[str, str]] = {
     "غلام": ("गुलाम", "ghulaam"),
     "غلاموں": ("गुलामों", "ghulaamon"),
     "فرمادی": ("फरमादी", "farmaadi"),
+    "علی": ("अली", "ali"),
+    "آج": ("आज", "aaj"),
+    "در": ("दर", "dar"),
 }
 
 # ---------------------------------------------------------------------------
