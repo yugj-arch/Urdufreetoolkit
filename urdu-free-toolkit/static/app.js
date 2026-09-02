@@ -11,9 +11,12 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
+/* Engine ids the "Recommended" chip ticks per step — also what loadProviders()
+   pre-selects on load. If none of them are available (e.g. an API key isn't
+   set), loadProviders() falls back to the first engine that actually works. */
 const RECOMMENDED = {
-  ocr: ["gpt", "gcv"],
-  translit: ["gpt", "rule", "aksharamukha"],
+  ocr: ["gcv"],
+  translit: ["rule"],
 };
 
 const state = {
@@ -26,17 +29,40 @@ const state = {
 
 /* ---------- boot ---------- */
 document.addEventListener("DOMContentLoaded", () => {
-  wireTabs();
   wireDropzone();
   wireSettings();
   wireBatch();
+  wireScriptToggle();
   $("#run-ocr").addEventListener("click", runOcr);
   $("#run-translit").addEventListener("click", runTranslit);
-  $("#use-paste").addEventListener("click", usePaste);
   $$("[data-pick]").forEach((b) => b.addEventListener("click", () => pick(b.dataset.pick)));
   loadConfig();
   loadProviders();
 });
+
+/* ---------- script toggle (Roman / Devanagari / Both) ---------- */
+/* Mirrors Rekhta's ENG/HIN/URD switch: picks which script the result cards
+   show. Pure CSS does the hiding via body[data-script]; choice is remembered. */
+function wireScriptToggle() {
+  const box = $("#script-toggle");
+  if (!box) return;
+  let saved = "both";
+  try { saved = localStorage.getItem("urdu.script") || "both"; } catch (e) {}
+  setScript(saved);
+  $$("#script-toggle button").forEach((b) =>
+    b.addEventListener("click", () => setScript(b.dataset.script)));
+}
+
+function setScript(v) {
+  if (!["roman", "deva", "both"].includes(v)) v = "both";
+  document.body.dataset.script = v;
+  try { localStorage.setItem("urdu.script", v); } catch (e) {}
+  $$("#script-toggle button").forEach((b) => {
+    const on = b.dataset.script === v;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
 
 /* ---------- runtime config ---------- */
 async function loadConfig() {
@@ -56,16 +82,6 @@ function applyConfig() {
   renderBatchQueue();
 }
 
-function wireTabs() {
-  $$(".tab").forEach((t) => t.addEventListener("click", () => {
-    if (t.disabled) return;
-    $$(".tab").forEach((x) => x.classList.remove("active"));
-    $$(".panel").forEach((x) => x.classList.remove("active"));
-    t.classList.add("active");
-    $("#panel-" + t.dataset.tab).classList.add("active");
-  }));
-}
-
 /* ---------- providers ---------- */
 async function loadProviders() {
   try {
@@ -79,6 +95,19 @@ async function loadProviders() {
   renderEngineList("translit", "#translit-engines");
   renderEngineList("ocr", "#batch-ocr-engines", "batch-ocr");
   renderEngineList("translit", "#batch-translit-engines", "batch-translit");
+  // Start with a working default so the page is usable without touching engines:
+  // the recommended engine, else the first one that's actually available.
+  ["ocr", "translit", "batch-ocr", "batch-translit"].forEach((c) => {
+    if (!checkedIds(c).length) pick(c + ":recommended");
+    if (!checkedIds(c).length) checkFirstAvailable(c);
+  });
+}
+
+/* Tick the first engine in the list that isn't disabled — the fallback when
+   no recommended engine can run (no API keys, model not downloaded, …). */
+function checkFirstAvailable(cap) {
+  const box = $$(`input[data-cap="${cap}"]`).find((b) => !b.disabled);
+  if (box) box.checked = true;
 }
 
 /* `capAttr` overrides the value written to each checkbox's data-cap — the Batch
@@ -225,30 +254,40 @@ function ocrColShell(id) {
 function fillOcrCol(row) {
   const el = $(`#ocr-columns .col[data-pid="${cssEsc(row.provider_id)}"]`);
   if (!el) return;
-  el.querySelector(".ms").textContent = row.ms != null ? row.ms + " ms" : "";
   if (!row.ok) {
-    el.innerHTML = el.querySelector("h3").outerHTML + `<div class="err">${esc(row.error || "failed")}</div>`;
+    el.classList.add("is-error");
+    el.innerHTML = `<h3><span>${esc(labelFor("ocr", row.provider_id))}</span></h3>` +
+      `<div class="err">${esc(row.error || "failed")}</div>`;
     return;
   }
+  el.innerHTML = "";
+
   const ta = document.createElement("textarea");
   ta.dir = "rtl";
   ta.value = row.text || "";
+  const field = elWith("div", "field field--urdu");
+  const head = elWith("div", "field-head");
+  head.appendChild(elWith("span", "lab", "Urdu text"));
+  head.appendChild(copyBtn(row.text || ""));
+  field.appendChild(head);
+  field.appendChild(ta);
+  el.appendChild(field);
+
+  if (row.notes) el.appendChild(elWith("div", "foot", "note: " + row.notes));
+  if (row.roman) el.appendChild(resultField("Roman", row.roman, true));
+  if (row.devanagari) el.appendChild(resultField("Devanagari", row.devanagari, false));
+
   const use = document.createElement("button");
-  use.textContent = "Use this text";
+  use.className = "use-btn";
+  use.textContent = "Use this text ↓";
   use.addEventListener("click", () => {
     $("#urdu-input").value = ta.value;
+    checkedIds("translit").length || pick("translit:recommended");
+    runTranslit();
     revealTranslit(true);
   });
-  el.innerHTML = el.querySelector("h3").outerHTML;
-  el.appendChild(elWith("div", "lab", "Urdu"));
-  el.appendChild(ta);
-  if (row.notes) el.appendChild(elWith("div", "running", "note: " + row.notes));
-  if (row.devanagari || row.roman) {
-    el.appendChild(elWith("div", "lab", "translit (from this engine)"));
-    if (row.devanagari) el.appendChild(outBlock(row.devanagari, false));
-    if (row.roman) el.appendChild(outBlock(row.roman, true));
-  }
   el.appendChild(use);
+  el.appendChild(engineFoot("ocr", row.provider_id, row.ms));
 }
 
 /* ---------- transliteration ---------- */
@@ -288,24 +327,37 @@ async function runTranslit() {
 function fillTranslitCol(row) {
   const el = $(`#translit-columns .col[data-pid="${cssEsc(row.provider_id)}"]`);
   if (!el) return;
-  const head = el.querySelector("h3").outerHTML.replace(">…<", ">" + (row.ms ?? "") + " ms<");
-  if (!row.ok) { el.innerHTML = head + `<div class="err">${esc(row.error || "failed")}</div>`; return; }
-  el.innerHTML = head;
-  el.appendChild(elWith("div", "lab", "Devanagari"));
-  el.appendChild(outBlock(row.devanagari || "—", false));
-  el.appendChild(copyBtn(row.devanagari || ""));
-  el.appendChild(elWith("div", "lab", "Roman"));
-  el.appendChild(outBlock(row.roman || "—", true));
-  el.appendChild(copyBtn(row.roman || ""));
+  if (!row.ok) {
+    el.classList.add("is-error");
+    el.innerHTML = `<h3><span>${esc(labelFor("translit", row.provider_id))}</span></h3>` +
+      `<div class="err">${esc(row.error || "failed")}</div>`;
+    return;
+  }
+  el.innerHTML = "";
+  el.appendChild(resultField("Roman", row.roman || "—", true));
+  el.appendChild(resultField("Devanagari", row.devanagari || "—", false));
+  el.appendChild(engineFoot("translit", row.provider_id, row.ms));
 }
 
-/* ---------- paste text ---------- */
-function usePaste() {
-  const t = $("#paste-box").value.trim();
-  if (!t) return;
-  $("#urdu-input").value = t;
-  state.file = null;
-  revealTranslit(true);
+/* A labelled result block: label + copy button on one row, the text below.
+   `roman` picks the serif Roman styling over the Devanagari font. */
+function resultField(label, text, roman) {
+  const wrap = elWith("div", "field " + (roman ? "field--roman" : "field--deva"));
+  const head = elWith("div", "field-head");
+  head.appendChild(elWith("span", "lab", label));
+  head.appendChild(copyBtn(text === "—" ? "" : text));
+  const out = document.createElement("div");
+  out.className = "out" + (roman ? " roman" : "");
+  out.textContent = text;
+  wrap.appendChild(head);
+  wrap.appendChild(out);
+  return wrap;
+}
+
+function engineFoot(cap, id, ms) {
+  const d = elWith("div", "foot");
+  d.textContent = "via " + labelFor(cap, id) + (ms != null ? "  ·  " + ms + " ms" : "");
+  return d;
 }
 
 /* ---------- batch (SSE) ---------- */
@@ -494,15 +546,12 @@ function elWith(tag, cls, text) {
   e.textContent = text;
   return e;
 }
-function outBlock(text, roman) {
-  const e = document.createElement("div");
-  e.className = "out" + (roman ? " roman" : "");
-  e.textContent = text;
-  return e;
-}
 function copyBtn(text) {
   const b = document.createElement("button");
+  b.type = "button";
+  b.className = "copy-btn";
   b.textContent = "Copy";
+  b.disabled = !text;
   b.addEventListener("click", () => {
     navigator.clipboard.writeText(text).then(() => { b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200); });
   });

@@ -13,9 +13,10 @@ empty picker.
 """
 from __future__ import annotations
 
-# Keyed by Capability.value. Order matters: it's the display / ranking order.
+# Keyed by Capability.value. Order matters: it's the display / ranking order,
+# and the first entry is the engine the UI pre-selects on load (the one default).
 # At most four per step.
 FEATURED: dict[str, list[str]] = {
-    "ocr":       ["gpt", "gcv", "paddle", "easyocr"],
-    "translit":  ["gpt", "rule", "aksharamukha", "uroman"],
+    "ocr":       ["gcv", "gpt", "paddle", "easyocr"],
+    "translit":  ["rule", "gpt", "aksharamukha", "uroman"],
 }

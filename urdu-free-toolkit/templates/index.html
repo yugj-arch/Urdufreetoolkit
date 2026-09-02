@@ -7,25 +7,35 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
+
+<div class="topbar">
+  <a class="brand" href="/">
+    <span class="mark" dir="rtl">اردو</span>
+    <span class="name">Urdu Toolkit</span>
+  </a>
+  <span class="tagline">image &rarr; Urdu &rarr; Devanagari &amp; Roman</span>
+  <span class="spacer"></span>
+  <div class="scripttoggle" id="script-toggle" role="group" aria-label="Script shown in results">
+    <button type="button" data-script="roman">Roman</button>
+    <button type="button" data-script="deva">Devanagari</button>
+    <button type="button" data-script="both">Both</button>
+  </div>
+  <button id="settings-btn" class="ghost" type="button">Settings</button>
+</div>
+
 <div class="wrap">
-  <header>
-    <div class="badge">Free / offline first · pick your engines</div>
+  <header class="hero">
+    <div class="kicker">Free · offline-first · compare engines</div>
     <h1>Urdu Toolkit</h1>
-    <p class="sub">Pull Urdu out of images, transliterate to Devanagari &amp; Roman, and
-      run several engines side by side to compare. Offline engines need no key; paid
-      APIs are optional extras.</p>
-    <button id="settings-btn" class="ghost" type="button">Settings</button>
+    <p class="sub">Pull Urdu out of an image, transliterate it to Devanagari and Roman,
+      and run several engines side by side to see which one reads the line best.</p>
   </header>
 
-  <nav class="tabs">
-    <button class="tab active" data-tab="single" type="button">Single image</button>
-    <button class="tab" data-tab="text" type="button">Paste text</button>
-    <button class="tab" data-tab="batch" type="button">Batch</button>
-  </nav>
-
-  <section class="panel active" id="panel-single">
+  <section class="step" id="step-ocr">
     <div class="card">
-      <h2>1. OCR — image to Urdu text</h2>
+      <h2><span class="num">1</span>Read Urdu from an image</h2>
+      <p class="dim">Pick a photo or scan — the engines below read the Urdu off it.
+        Offline engines run on this computer and need no key.</p>
       <div class="engines" id="ocr-engines"><p class="dim">Loading engines…</p></div>
       <div class="quick">
         <button type="button" class="chip" data-pick="ocr:offline">All offline</button>
@@ -37,22 +47,44 @@
         <span id="drop-label"><strong>Click or drop</strong> an image (JPG / PNG)</span>
         <img id="preview" alt="">
       </label>
-      <button id="run-ocr" class="primary" type="button" disabled>Run OCR</button>
+      <button id="run-ocr" class="primary" type="button" disabled>Read the image</button>
       <div class="columns" id="ocr-columns"></div>
     </div>
   </section>
 
-  <section class="panel" id="panel-text">
-    <div class="card">
-      <h2>Paste Urdu text</h2>
-      <textarea id="paste-box" dir="rtl" placeholder="یہاں اردو لکھیں…"></textarea>
-      <div class="row"><button id="use-paste" class="primary" type="button">Use this text</button></div>
+  <div class="rule"><span>&#10022;</span></div>
+
+  <section class="step" id="step-translit">
+    <div class="card" id="translit-card">
+      <h2><span class="num">2</span>Turn it into Devanagari &amp; Roman</h2>
+      <p class="dim">Type or paste Urdu here — or use the button on a result above.
+        Fix any wrong letters first, then hit the button.</p>
+      <textarea id="urdu-input" dir="rtl" placeholder="یہاں اردو لکھیں…"></textarea>
+      <div class="engines" id="translit-engines"><p class="dim">Loading engines…</p></div>
+      <div class="quick">
+        <button type="button" class="chip" data-pick="translit:offline">All offline</button>
+        <button type="button" class="chip" data-pick="translit:recommended">Recommended</button>
+        <button type="button" class="chip" data-pick="translit:none">Clear</button>
+      </div>
+      <div class="row">
+        <label>Roman style
+          <select id="roman-style">
+            <option value="natural">Natural (mohabbat)</option>
+            <option value="iso">ISO 15919</option>
+            <option value="iast">IAST</option>
+          </select>
+        </label>
+        <button id="run-translit" class="primary" type="button">Transliterate</button>
+      </div>
+      <div class="columns" id="translit-columns"></div>
     </div>
   </section>
 
-  <section class="panel" id="panel-batch">
+  <div class="rule"><span>&#10022;</span></div>
+
+  <section class="step" id="step-batch">
     <div class="card">
-      <h2>Batch — many images at once</h2>
+      <h2><span class="num alt">＋</span>Many images at once <span class="opt">optional</span></h2>
       <p class="dim">Queue a set of images, pick engines, and run OCR (plus optional
         transliteration) over every file. Results land in a table you can export as CSV.</p>
 
@@ -105,29 +137,7 @@
     </div>
   </section>
 
-  <div class="card" id="translit-card" hidden>
-    <h2>2. Transliterate — Urdu to Devanagari + Roman</h2>
-    <p class="dim">Edit the Urdu below if an OCR engine misread it, then pick transliteration engines.</p>
-    <textarea id="urdu-input" dir="rtl" placeholder="Urdu text lands here…"></textarea>
-    <div class="engines" id="translit-engines"></div>
-    <div class="quick">
-      <button type="button" class="chip" data-pick="translit:offline">All offline</button>
-      <button type="button" class="chip" data-pick="translit:recommended">Recommended</button>
-      <button type="button" class="chip" data-pick="translit:none">Clear</button>
-    </div>
-    <div class="row">
-      <label>Roman style
-        <select id="roman-style">
-          <option value="natural">Natural (mohabbat)</option>
-          <option value="iso">ISO 15919</option>
-          <option value="iast">IAST</option>
-        </select>
-      </label>
-      <button id="run-translit" class="primary" type="button">Run transliteration</button>
-    </div>
-    <div class="columns" id="translit-columns"></div>
-  </div>
-
+  <div class="rule"><span>&#10022;</span></div>
   <footer>Offline engines run entirely on this machine. API engines send your image or text to that provider.</footer>
 </div>
 
