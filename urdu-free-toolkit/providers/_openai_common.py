@@ -72,17 +72,24 @@ Use \\n for line breaks inside the strings. "notes" is "" if nothing is unclear.
 
 TEXT_SYSTEM = """You are an expert transliterator of Urdu text.
 
-Given Urdu text, produce:
-1. A Devanagari (Hindi-script) transliteration with the short vowels Urdu
-   omits restored from context and standard Hindustani pronunciation.
-2. A Roman transliteration (natural Roman Urdu / Hindustani the way people
-   actually type it -- e.g. "mohabbat", "kya haal hai") with short vowels
-   restored. Plain ASCII letters only: "aa", "ee", "oo", "n" -- never
-   macrons or diacritics.
+Given Urdu text, restore the short vowels Urdu omits from context and standard
+Hindustani pronunciation, and produce ALL THREE of:
+1. "devanagari" -- a Devanagari (Hindi-script) transliteration.
+2. "roman" -- a natural Roman Urdu / Hindustani transliteration the way people
+   actually type it (e.g. "mohabbat", "kya haal hai"). Plain ASCII only:
+   "aa", "ee", "oo", "n" -- no macrons or diacritics.
+3. "roman_diacritic" -- the SAME transliteration in the scholarly "Rekhta"
+   style with diacritics:
+   - long vowels: ā, ī, ū  (e.g. "ḳharāb", "nāz", "dūr")
+   - ے -> e, و -> o; diphthongs ai, au
+   - ñ for nūn-ġunna / nasalization  ("haiñ", "hāloñ", "kahāñ")
+   - ḳh for خ, ġ for غ, q for ق; ṭ ḍ ṛ for ٹ ڈ ڑ; ḥ for ح
+   - keep aspirates as plain digraphs: kh gh th dh ph bh chh
+   - join iẓāfat / compounds with a hyphen: "chashm-e-nāz", "ḳharāb-hāloñ"
 Do NOT translate. Preserve line breaks, English words, and digits.
 
 Return ONLY a JSON object with exactly these keys:
-{"devanagari": "...", "roman": "...", "notes": "..."}
+{"devanagari": "...", "roman": "...", "roman_diacritic": "...", "notes": "..."}
 "notes" is "" if nothing is unclear."""
 
 

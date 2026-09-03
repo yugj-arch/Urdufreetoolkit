@@ -27,3 +27,14 @@ def test_app_js_reads_runtime_config():
     assert "batch_max_files" in js
     # the Settings panel reacts to the read-only flag Vercel sets
     assert "settings_readonly" in js
+
+
+def test_diacritics_toggle_is_present_and_wired():
+    html = (ROOT / "templates/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "static/app.js").read_text(encoding="utf-8")
+    assert "diacritics-toggle" in html
+    # the dead "Roman style" selects are gone, replaced by the toggle
+    assert "roman-style" not in html and "batch-roman-style" not in html
+    # results carry both spellings; the toggle repaints them with no re-fetch
+    assert "roman_diacritic" in js
+    assert "urdu.diacritics" in js and "refreshRomanFields" in js

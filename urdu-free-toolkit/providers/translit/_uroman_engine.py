@@ -37,12 +37,15 @@ def _clean_roman(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
 
-def _uroman_word(word: str):
+def _uroman_word(word: str, style: str = "plain"):
     """OOV fallback: Devanagari from the rule engine's character rules (uroman
     has none), Roman from uroman's skeleton reading. Falls back to the rule
-    engine's Roman too if uroman errors or returns nothing usable."""
-    deva, rule_roman = _rule._transliterate_word_rule_based(word)
-    if _UR is None:
+    engine's Roman too if uroman errors or returns nothing usable.
+
+    In ``style="diacritic"`` the skeleton reading (``mhbt``) can't carry marks,
+    so the rule engine's diacritic character rules are used for Roman too."""
+    deva, rule_roman = _rule._transliterate_word_rule_based(word, style)
+    if _UR is None or style == "diacritic":
         return deva, rule_roman
     try:
         roman = _clean_roman(_UR.romanize_string(word))
@@ -53,6 +56,7 @@ def _uroman_word(word: str):
     return deva, roman
 
 
-def transliterate(text: str):
+def transliterate(text: str, style: str = "plain"):
     """Main entry point. Returns ``(devanagari_text, roman_text)``."""
-    return _rule.transliterate_with(_uroman_word, text)
+    return _rule.transliterate_with(
+        lambda w: _uroman_word(w, style), text, style=style)

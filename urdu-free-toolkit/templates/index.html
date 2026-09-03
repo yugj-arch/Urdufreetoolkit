@@ -20,6 +20,10 @@
     <button type="button" data-script="deva">Devanagari</button>
     <button type="button" data-script="both">Both</button>
   </div>
+  <div class="scripttoggle" id="diacritics-toggle" role="group" aria-label="Roman spelling">
+    <button type="button" data-dia="off">Plain</button>
+    <button type="button" data-dia="on" title="Rekhta-style marks: ā ī ū ñ ḳh ġ">Diacritics</button>
+  </div>
   <button id="settings-btn" class="ghost" type="button">Settings</button>
 </div>
 
@@ -33,22 +37,41 @@
 
   <section class="step" id="step-ocr">
     <div class="card">
-      <h2><span class="num">1</span>Read Urdu from an image</h2>
-      <p class="dim">Pick a photo or scan — the engines below read the Urdu off it.
-        Offline engines run on this computer and need no key.</p>
+      <h2><span class="num">1</span>Read Urdu from image(s)</h2>
+      <p class="dim">Drop one image or a whole set — the engines below read the Urdu off
+        each. Offline engines run on this computer and need no key. Send the text down
+        to step 2 to turn it into Devanagari &amp; Roman.</p>
+
       <div class="engines" id="ocr-engines"><p class="dim">Loading engines…</p></div>
       <div class="quick">
         <button type="button" class="chip" data-pick="ocr:offline">All offline</button>
         <button type="button" class="chip" data-pick="ocr:recommended">Recommended</button>
         <button type="button" class="chip" data-pick="ocr:none">Clear</button>
       </div>
+
       <label class="dropzone" id="dropzone">
-        <input type="file" id="file-input" accept="image/*" hidden>
-        <span id="drop-label"><strong>Click or drop</strong> an image (JPG / PNG)</span>
+        <input type="file" id="file-input" accept="image/*" multiple hidden>
+        <span id="drop-label"><strong>Click or drop</strong> image(s) (JPG / PNG)</span>
         <img id="preview" alt="">
       </label>
-      <button id="run-ocr" class="primary" type="button" disabled>Read the image</button>
+      <div id="image-queue"><p class="dim">No images added.</p></div>
+
+      <button id="run-ocr" class="primary" type="button" disabled>Read image(s)</button>
+      <div id="ocr-progress" class="dim" hidden></div>
+
       <div class="columns" id="ocr-columns"></div>
+
+      <div id="batch-results" class="batch-table-wrap" hidden>
+        <table>
+          <thead>
+            <tr>
+              <th>File</th><th>OCR engine</th><th>Urdu</th><th>ms</th><th>Error</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <button id="batch-csv" class="ghost" type="button" hidden>Download CSV</button>
+      </div>
     </div>
   </section>
 
@@ -67,73 +90,10 @@
         <button type="button" class="chip" data-pick="translit:none">Clear</button>
       </div>
       <div class="row">
-        <label>Roman style
-          <select id="roman-style">
-            <option value="natural">Natural (mohabbat)</option>
-            <option value="iso">ISO 15919</option>
-            <option value="iast">IAST</option>
-          </select>
-        </label>
         <button id="run-translit" class="primary" type="button">Transliterate</button>
+        <span class="row-hint">Roman spelling follows the <strong>Plain / Diacritics</strong> switch up top.</span>
       </div>
       <div class="columns" id="translit-columns"></div>
-    </div>
-  </section>
-
-  <div class="rule"><span>&#10022;</span></div>
-
-  <section class="step" id="step-batch">
-    <div class="card">
-      <h2><span class="num alt">＋</span>Many images at once <span class="opt">optional</span></h2>
-      <p class="dim">Queue a set of images, pick engines, and run OCR (plus optional
-        transliteration) over every file. Results land in a table you can export as CSV.</p>
-
-      <h3 class="settings-sub">OCR engines</h3>
-      <div class="engines" id="batch-ocr-engines"><p class="dim">Loading engines…</p></div>
-      <div class="quick">
-        <button type="button" class="chip" data-pick="batch-ocr:offline">All offline</button>
-        <button type="button" class="chip" data-pick="batch-ocr:recommended">Recommended</button>
-        <button type="button" class="chip" data-pick="batch-ocr:none">Clear</button>
-      </div>
-
-      <h3 class="settings-sub">Transliteration engines <span class="dim">(optional)</span></h3>
-      <div class="engines" id="batch-translit-engines"><p class="dim">Loading engines…</p></div>
-      <div class="quick">
-        <button type="button" class="chip" data-pick="batch-translit:offline">All offline</button>
-        <button type="button" class="chip" data-pick="batch-translit:recommended">Recommended</button>
-        <button type="button" class="chip" data-pick="batch-translit:none">Clear</button>
-      </div>
-      <div class="row">
-        <label>Roman style
-          <select id="batch-roman-style">
-            <option value="natural">Natural (mohabbat)</option>
-            <option value="iso">ISO 15919</option>
-            <option value="iast">IAST</option>
-          </select>
-        </label>
-      </div>
-
-      <label class="dropzone" id="batch-dropzone">
-        <input type="file" id="batch-file-input" accept="image/*" multiple hidden>
-        <span id="batch-drop-hint"><strong>Click or drop</strong> images (JPG / PNG) — up to 30</span>
-      </label>
-      <div id="batch-queue"><p class="dim">No images queued.</p></div>
-
-      <button id="run-batch" class="primary" type="button" disabled>Run batch</button>
-      <div id="batch-progress" class="dim" hidden></div>
-
-      <div id="batch-results" class="batch-table-wrap" hidden>
-        <table>
-          <thead>
-            <tr>
-              <th>File</th><th>OCR engine</th><th>Urdu</th><th>Translit engine</th>
-              <th>Devanagari</th><th>Roman</th><th>ms</th><th>Error</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-        <button id="batch-csv" class="ghost" type="button" hidden>Download CSV</button>
-      </div>
     </div>
   </section>
 

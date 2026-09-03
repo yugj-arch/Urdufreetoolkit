@@ -38,13 +38,18 @@ class AksharamukhaTranslit(BaseProvider):
         if engine._ak is None:
             return TranslitResult(provider_id=self.info.id, ok=False,
                                   error="aksharamukha not installed")
-        t = self._timed(engine.transliterate, text)
+        def _both():
+            deva, roman = engine.transliterate(text, style="plain")
+            _, roman_dia = engine.transliterate(text, style="diacritic")
+            return deva, roman, roman_dia
+
+        t = self._timed(_both)
         if not t["ok"]:
             return TranslitResult(provider_id=self.info.id, ok=False,
                                   error=t["error"], ms=t["ms"])
-        deva, roman = t["value"]
+        deva, roman, roman_dia = t["value"]
         return TranslitResult(provider_id=self.info.id, ok=True, ms=t["ms"],
-                              devanagari=deva, roman=roman)
+                              devanagari=deva, roman=roman, roman_diacritic=roman_dia)
 
 
 PROVIDER = AksharamukhaTranslit()

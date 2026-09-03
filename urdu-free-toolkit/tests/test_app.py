@@ -64,6 +64,26 @@ def test_transliterate_returns_row(client):
     assert rows[0]["devanagari"] == "देव" and rows[0]["roman"] == "dev"
 
 
+def test_transliterate_row_carries_both_roman_spellings(client):
+    r = client.post("/api/transliterate", json={"text": "میں", "providers": ["tr_fake"]})
+    row = r.get_json()["results"][0]
+    assert row["roman"] == "dev" and row["roman_diacritic"] == "dev-dia"
+
+
+def test_batch_translit_row_carries_both_roman_spellings(client):
+    r = client.post(
+        "/api/batch",
+        data={
+            "images": (io.BytesIO(_png_bytes()), "a.png"),
+            "ocr_providers": "fake_ok",
+            "translit_providers": "tr_fake",
+        },
+        content_type="multipart/form-data",
+    )
+    body = r.get_data(as_text=True)
+    assert '"roman": "dev"' in body and '"roman_diacritic": "dev-dia"' in body
+
+
 def test_batch_requires_images(client):
     r = client.post("/api/batch", data={"ocr_providers": "fake_ok"})
     assert r.status_code == 400

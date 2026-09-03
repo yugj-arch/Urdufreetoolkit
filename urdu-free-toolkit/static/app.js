@@ -1,9 +1,9 @@
 /* Urdu Toolkit front-end. No dependencies. Talks to:
    GET  /api/config           -> runtime flags (batch cap, settings read-only)
    GET  /api/providers        -> engine lists per capability
-   POST /api/ocr              -> SSE stream, one row per engine
+   POST /api/ocr              -> SSE stream, one row per engine (single image)
    POST /api/transliterate    -> {results:[...]}
-   POST /api/batch            -> SSE stream, one row per (file x ocr x translit)
+   POST /api/batch            -> SSE stream, one row per (file x ocr engine) for many images
    GET/POST /api/settings     -> API-key status / save
 */
 "use strict";
@@ -20,21 +20,22 @@ const RECOMMENDED = {
 };
 
 const state = {
-  file: null,
+  images: [],     // File[] added to the reader — one image or many
   providers: { ocr: [], translit: [] },
-  batchFiles: [], // File[] queued in the Batch tab
-  batchRows: [],  // accumulated result rows, for the CSV download
+  batchRows: [],  // accumulated result rows, for the CSV download (multi-image runs)
   config: { on_vercel: false, batch_max_files: 30, settings_readonly: false },
+  diacritics: false,  // Roman spelling: false = plain ASCII, true = Rekhta-style marks
 };
 
 /* ---------- boot ---------- */
 document.addEventListener("DOMContentLoaded", () => {
   wireDropzone();
   wireSettings();
-  wireBatch();
   wireScriptToggle();
+  wireDiacriticsToggle();
   $("#run-ocr").addEventListener("click", runOcr);
   $("#run-translit").addEventListener("click", runTranslit);
+  $("#batch-csv").addEventListener("click", downloadBatchCsv);
   $$("[data-pick]").forEach((b) => b.addEventListener("click", () => pick(b.dataset.pick)));
   loadConfig();
   loadProviders();
@@ -64,6 +65,32 @@ function setScript(v) {
   });
 }
 
+/* ---------- diacritics toggle (Plain / Diacritics) ---------- */
+/* Picks the Roman spelling shown: plain ASCII ("khraab") or Rekhta-style marks
+   ("ḳharāb"). Every result already carries BOTH spellings, so flipping this
+   just repaints the Roman blocks on screen — no re-run. Choice is remembered.
+   Devanagari is unaffected. */
+function wireDiacriticsToggle() {
+  const box = $("#diacritics-toggle");
+  if (!box) return;
+  let saved = "off";
+  try { saved = localStorage.getItem("urdu.diacritics") || "off"; } catch (e) {}
+  setDiacritics(saved === "on");
+  $$("#diacritics-toggle button").forEach((b) =>
+    b.addEventListener("click", () => setDiacritics(b.dataset.dia === "on")));
+}
+
+function setDiacritics(on) {
+  state.diacritics = !!on;
+  try { localStorage.setItem("urdu.diacritics", on ? "on" : "off"); } catch (e) {}
+  $$("#diacritics-toggle button").forEach((b) => {
+    const sel = (b.dataset.dia === "on") === state.diacritics;
+    b.classList.toggle("on", sel);
+    b.setAttribute("aria-pressed", sel ? "true" : "false");
+  });
+  refreshRomanFields();
+}
+
 /* ---------- runtime config ---------- */
 async function loadConfig() {
   try {
@@ -73,13 +100,10 @@ async function loadConfig() {
   applyConfig();
 }
 
-/* Reflect the server flags in the UI: shrink the Batch cap hint, and when the
-   host filesystem is read-only (Vercel) tell the user keys live in env vars. */
+/* Reflect the server flags in the UI: the image queue shows the per-run cap that
+   comes back from /api/config (30 locally, fewer on Vercel). */
 function applyConfig() {
-  const hint = $("#batch-drop-hint");
-  if (hint) hint.innerHTML =
-    `<strong>Click or drop</strong> images (JPG / PNG) — up to ${batchMax()}`;
-  renderBatchQueue();
+  renderQueue();
 }
 
 /* ---------- providers ---------- */
@@ -93,11 +117,9 @@ async function loadProviders() {
   }
   renderEngineList("ocr", "#ocr-engines");
   renderEngineList("translit", "#translit-engines");
-  renderEngineList("ocr", "#batch-ocr-engines", "batch-ocr");
-  renderEngineList("translit", "#batch-translit-engines", "batch-translit");
   // Start with a working default so the page is usable without touching engines:
   // the recommended engine, else the first one that's actually available.
-  ["ocr", "translit", "batch-ocr", "batch-translit"].forEach((c) => {
+  ["ocr", "translit"].forEach((c) => {
     if (!checkedIds(c).length) pick(c + ":recommended");
     if (!checkedIds(c).length) checkFirstAvailable(c);
   });
@@ -110,9 +132,8 @@ function checkFirstAvailable(cap) {
   if (box) box.checked = true;
 }
 
-/* `capAttr` overrides the value written to each checkbox's data-cap — the Batch
-   tab passes "batch-ocr" / "batch-translit" so its picks stay separate from the
-   single-image pickers that share the same `cap`. */
+/* `capAttr` overrides the value written to each checkbox's data-cap; kept as a
+   hook for reusing the same engine list under a second picker. */
 function renderEngineList(cap, sel, capAttr = cap) {
   const box = $(sel);
   const rows = state.providers[cap] || [];
@@ -154,57 +175,111 @@ function checkedIds(cap) {
 
 function pick(spec) {
   const [cap, what] = spec.split(":");
-  const baseCap = cap.replace(/^batch-/, ""); // "batch-ocr" -> "ocr" for the lookups below
-  const boxes = $$(`input[data-cap="${cap}"]`);
-  boxes.forEach((b) => {
+  $$(`input[data-cap="${cap}"]`).forEach((b) => {
     if (b.disabled) { b.checked = false; return; }
     if (what === "none") b.checked = false;
     else if (what === "offline") {
-      const row = (state.providers[baseCap] || []).find((r) => r.id === b.value);
+      const row = (state.providers[cap] || []).find((r) => r.id === b.value);
       b.checked = !!row && row.badge === "offline";
     } else if (what === "recommended") {
-      b.checked = (RECOMMENDED[baseCap] || []).includes(b.value);
+      b.checked = (RECOMMENDED[cap] || []).includes(b.value);
     }
   });
 }
 
-/* ---------- dropzone ---------- */
+/* ---------- image reader (one image or many) ---------- */
 function wireDropzone() {
   const dz = $("#dropzone");
   const input = $("#file-input");
-  input.addEventListener("change", (e) => e.target.files[0] && handleFile(e.target.files[0]));
+  input.addEventListener("change", () => { addImages(input.files); input.value = ""; });
   dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
   dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
   dz.addEventListener("drop", (e) => {
     e.preventDefault(); dz.classList.remove("drag");
-    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+    addImages(e.dataTransfer.files);
   });
 }
 
-function handleFile(file) {
-  state.file = file;
-  const img = $("#preview");
-  const rd = new FileReader();
-  rd.onload = () => { img.src = rd.result; img.style.display = "block"; };
-  rd.readAsDataURL(file);
-  $("#drop-label").innerHTML = "<strong>" + esc(file.name) + "</strong> — click to change";
-  $("#run-ocr").disabled = false;
+/* Per-run cap from GET /api/config — 30 locally, fewer on Vercel where the
+   request body is capped at ~4.5 MB. */
+const batchMax = () => state.config.batch_max_files || 30;
+
+function addImages(fileList) {
+  for (const f of fileList) {
+    if (!f.type.startsWith("image/")) continue;
+    if (state.images.length >= batchMax()) break;
+    if (state.images.some((x) => x.name === f.name && x.size === f.size)) continue;
+    state.images.push(f);
+  }
+  renderQueue();
 }
 
-/* ---------- OCR (SSE) ---------- */
+/* Draw the queue under the dropzone. One image: show its preview and keep the
+   familiar single-image feel. Many: hide the preview, list the files with a
+   remove button each. The Run button follows whether anything is queued. */
+function renderQueue() {
+  const box = $("#image-queue");
+  const label = $("#drop-label");
+  const preview = $("#preview");
+  const n = state.images.length;
+  $("#run-ocr").disabled = n === 0;
+
+  if (!n) {
+    box.innerHTML = '<p class="dim">No images added.</p>';
+    if (preview) { preview.src = ""; preview.style.display = "none"; }
+    if (label) label.innerHTML =
+      `<strong>Click or drop</strong> image(s) (JPG / PNG) — up to ${batchMax()}`;
+    return;
+  }
+
+  if (n === 1 && preview) {
+    const rd = new FileReader();
+    rd.onload = () => { preview.src = rd.result; preview.style.display = "block"; };
+    rd.readAsDataURL(state.images[0]);
+    if (label) label.innerHTML =
+      "<strong>" + esc(state.images[0].name) + "</strong> — click to add more";
+  } else {
+    if (preview) { preview.src = ""; preview.style.display = "none"; }
+    if (label) label.innerHTML =
+      `<strong>Click or drop</strong> to add more (JPG / PNG) — up to ${batchMax()}`;
+  }
+
+  box.innerHTML =
+    `<p class="dim">${n} image${n === 1 ? "" : "s"} ready` +
+    (n >= batchMax() ? ` (max ${batchMax()})` : "") + `</p>` +
+    state.images.map((f, i) =>
+      `<div class="batch-file"><span>${esc(f.name)}</span>` +
+      `<button type="button" data-rm="${i}">&times;</button></div>`).join("");
+  $$("#image-queue [data-rm]").forEach((b) => b.addEventListener("click", () => {
+    state.images.splice(Number(b.dataset.rm), 1);
+    renderQueue();
+  }));
+}
+
+/* ---------- read image(s) ---------- */
+/* One image -> POST /api/ocr, rich side-by-side cards with an editable Urdu box
+   and a "use this text" button that hands it to step 2. Two or more ->
+   POST /api/batch, one table row per (file x engine) you can export as CSV. */
 async function runOcr() {
   const ids = checkedIds("ocr");
-  if (!state.file) return alert("Upload an image first.");
+  if (!state.images.length) return alert("Add an image first.");
   if (!ids.length) return alert("Tick at least one OCR engine.");
+  if (state.images.length === 1) return runSingle(state.images[0], ids);
+  return runMany(state.images, ids);
+}
 
+async function runSingle(file, ids) {
+  $("#batch-results").hidden = true;
+  $("#ocr-progress").hidden = true;
   const cols = $("#ocr-columns");
+  cols.hidden = false;
   cols.innerHTML = "";
   ids.forEach((id) => cols.appendChild(ocrColShell(id)));
   $("#run-ocr").disabled = true;
 
   try {
     const fd = new FormData();
-    fd.append("image", state.file);
+    fd.append("image", file);
     fd.append("providers", ids.join(","));
     const res = await fetch("/api/ocr", { method: "POST", body: fd });
     if (!res.ok) {
@@ -232,6 +307,61 @@ async function runOcr() {
     revealTranslit();
   } catch (e) {
     alert("OCR failed: " + e.message);
+  } finally {
+    $("#run-ocr").disabled = false;
+  }
+}
+
+async function runMany(files, ocrIds) {
+  const cols = $("#ocr-columns");
+  cols.hidden = true;
+  cols.innerHTML = "";
+  const tbody = $("#batch-results tbody");
+  tbody.innerHTML = "";
+  state.batchRows = [];
+  $("#batch-results").hidden = false;
+  $("#batch-csv").hidden = true;
+  $("#run-ocr").disabled = true;
+  const prog = $("#ocr-progress");
+  prog.hidden = false;
+  prog.textContent = `Processing 0 / ${files.length}…`;
+
+  try {
+    const fd = new FormData();
+    files.forEach((f) => fd.append("images", f, f.name));
+    fd.append("ocr_providers", ocrIds.join(","));
+    fd.append("translit_providers", "");   // step 1 is OCR only — step 2 does transliteration
+    const res = await fetch("/api/batch", { method: "POST", body: fd });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try { msg = (await res.json()).error || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data:")) continue;
+        const payload = JSON.parse(line.slice(5).trim());
+        if (payload.done) continue;
+        if (payload.progress) {
+          prog.textContent = `Processing ${payload.progress} / ${payload.total}…`;
+          continue;
+        }
+        addBatchRow(payload);
+      }
+    }
+    prog.textContent = `Done — ${state.batchRows.length} row${state.batchRows.length === 1 ? "" : "s"}.`;
+    $("#batch-csv").hidden = state.batchRows.length === 0;
+  } catch (e) {
+    prog.textContent = "Run failed: " + e.message;
   } finally {
     $("#run-ocr").disabled = false;
   }
@@ -274,7 +404,8 @@ function fillOcrCol(row) {
   el.appendChild(field);
 
   if (row.notes) el.appendChild(elWith("div", "foot", "note: " + row.notes));
-  if (row.roman) el.appendChild(resultField("Roman", row.roman, true));
+  if (row.roman || row.roman_diacritic)
+    el.appendChild(romanResultField(row.roman, row.roman_diacritic));
   if (row.devanagari) el.appendChild(resultField("Devanagari", row.devanagari, false));
 
   const use = document.createElement("button");
@@ -312,7 +443,7 @@ async function runTranslit() {
     const res = await fetch("/api/transliterate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, providers: ids, roman_style: $("#roman-style").value }),
+      body: JSON.stringify({ text, providers: ids }),
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
@@ -334,7 +465,7 @@ function fillTranslitCol(row) {
     return;
   }
   el.innerHTML = "";
-  el.appendChild(resultField("Roman", row.roman || "—", true));
+  el.appendChild(romanResultField(row.roman, row.roman_diacritic));
   el.appendChild(resultField("Devanagari", row.devanagari || "—", false));
   el.appendChild(engineFoot("translit", row.provider_id, row.ms));
 }
@@ -354,124 +485,50 @@ function resultField(label, text, roman) {
   return wrap;
 }
 
+/* Roman block carrying BOTH spellings (plain + diacritic) on the .out element.
+   The Plain/Diacritics toggle repaints these via refreshRomanFields() — no
+   re-fetch. */
+function romanResultField(plain, dia) {
+  const wrap = elWith("div", "field field--roman");
+  const head = elWith("div", "field-head");
+  head.appendChild(elWith("span", "lab", "Roman"));
+  head.appendChild(copyBtn(""));
+  const out = document.createElement("div");
+  out.className = "out roman";
+  out.dataset.plain = plain || "";
+  out.dataset.dia = dia || "";
+  wrap.appendChild(head);
+  wrap.appendChild(out);
+  paintRoman(out);
+  return wrap;
+}
+
+function paintRoman(out) {
+  const txt = (state.diacritics ? out.dataset.dia : out.dataset.plain)
+    || out.dataset.plain || out.dataset.dia || "—";
+  out.textContent = txt;
+  const copy = out.parentElement && out.parentElement.querySelector(".copy-btn");
+  if (copy) setCopyPayload(copy, txt === "—" ? "" : txt);
+}
+
+/* Repaint every Roman block on the page for the current toggle state. */
+function refreshRomanFields() { $$(".out.roman").forEach(paintRoman); }
+
 function engineFoot(cap, id, ms) {
   const d = elWith("div", "foot");
   d.textContent = "via " + labelFor(cap, id) + (ms != null ? "  ·  " + ms + " ms" : "");
   return d;
 }
 
-/* ---------- batch (SSE) ---------- */
-function wireBatch() {
-  const input = $("#batch-file-input");
-  input.addEventListener("change", () => { addBatchFiles(input.files); input.value = ""; });
-  const dz = $("#batch-dropzone");
-  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
-  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
-  dz.addEventListener("drop", (e) => {
-    e.preventDefault(); dz.classList.remove("drag");
-    addBatchFiles(e.dataTransfer.files);
-  });
-  $("#run-batch").addEventListener("click", runBatch);
-  $("#batch-csv").addEventListener("click", downloadBatchCsv);
-}
-
-/* Batch cap comes from GET /api/config — 30 locally, fewer on Vercel where the
-   request body is capped at ~4.5 MB. */
-const batchMax = () => state.config.batch_max_files || 30;
-
-function addBatchFiles(fileList) {
-  for (const f of fileList) {
-    if (!f.type.startsWith("image/")) continue;
-    if (state.batchFiles.length >= batchMax()) break;
-    if (state.batchFiles.some((x) => x.name === f.name && x.size === f.size)) continue;
-    state.batchFiles.push(f);
-  }
-  renderBatchQueue();
-}
-
-function renderBatchQueue() {
-  const box = $("#batch-queue");
-  const n = state.batchFiles.length;
-  $("#run-batch").disabled = n === 0;
-  if (!n) { box.innerHTML = '<p class="dim">No images queued.</p>'; return; }
-  box.innerHTML =
-    `<p class="dim">${n} image${n === 1 ? "" : "s"} queued` +
-    (n >= batchMax() ? ` (max ${batchMax()})` : "") + `</p>` +
-    state.batchFiles.map((f, i) =>
-      `<div class="batch-file"><span>${esc(f.name)}</span>` +
-      `<button type="button" data-rm="${i}">&times;</button></div>`).join("");
-  $$("#batch-queue [data-rm]").forEach((b) => b.addEventListener("click", () => {
-    state.batchFiles.splice(Number(b.dataset.rm), 1);
-    renderBatchQueue();
-  }));
-}
-
-async function runBatch() {
-  const ocrIds = checkedIds("batch-ocr");
-  const trIds = checkedIds("batch-translit");
-  if (!state.batchFiles.length) return alert("Queue at least one image.");
-  if (!ocrIds.length) return alert("Tick at least one OCR engine.");
-
-  const tbody = $("#batch-results tbody");
-  tbody.innerHTML = "";
-  state.batchRows = [];
-  $("#batch-results").hidden = false;
-  $("#batch-csv").hidden = true;
-  $("#run-batch").disabled = true;
-  const prog = $("#batch-progress");
-  prog.hidden = false;
-  prog.textContent = `Processing 0 / ${state.batchFiles.length}…`;
-
-  try {
-    const fd = new FormData();
-    state.batchFiles.forEach((f) => fd.append("images", f, f.name));
-    fd.append("ocr_providers", ocrIds.join(","));
-    fd.append("translit_providers", trIds.join(","));
-    fd.append("roman_style", $("#batch-roman-style").value);
-    const res = await fetch("/api/batch", { method: "POST", body: fd });
-    if (!res.ok) {
-      let msg = res.statusText;
-      try { msg = (await res.json()).error || msg; } catch (e) {}
-      throw new Error(msg);
-    }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const parts = buf.split("\n\n");
-      buf = parts.pop();
-      for (const part of parts) {
-        const line = part.trim();
-        if (!line.startsWith("data:")) continue;
-        const payload = JSON.parse(line.slice(5).trim());
-        if (payload.done) continue;
-        if (payload.progress) {
-          prog.textContent = `Processing ${payload.progress} / ${payload.total}…`;
-          continue;
-        }
-        addBatchRow(payload);
-      }
-    }
-    prog.textContent = `Done — ${state.batchRows.length} row${state.batchRows.length === 1 ? "" : "s"}.`;
-    $("#batch-csv").hidden = state.batchRows.length === 0;
-  } catch (e) {
-    prog.textContent = "Batch failed: " + e.message;
-  } finally {
-    $("#run-batch").disabled = false;
-  }
-}
-
-const BATCH_COLS = ["file", "ocr_engine", "urdu", "translit_engine", "devanagari", "roman", "ms", "error"];
+/* ---------- multi-image results table + CSV ---------- */
+const BATCH_COLS = ["file", "ocr_engine", "urdu", "ms", "error"];
 
 function addBatchRow(row) {
   state.batchRows.push(row);
   const tr = document.createElement("tr");
   tr.innerHTML = BATCH_COLS.map((c) => {
     const v = row[c] == null ? "" : String(row[c]);
-    const rtl = (c === "urdu" || c === "devanagari") ? ' dir="rtl"' : "";
+    const rtl = c === "urdu" ? ' dir="rtl"' : "";
     const cls = c === "error" && v ? ' class="err"' : "";
     return `<td${rtl}${cls}>${esc(v)}</td>`;
   }).join("");
@@ -485,11 +542,11 @@ function downloadBatchCsv() {
   };
   const lines = [BATCH_COLS.join(",")];
   for (const r of state.batchRows) lines.push(BATCH_COLS.map((c) => cell(r[c])).join(","));
-  // BOM so Excel reads the Urdu/Devanagari columns as UTF-8
+  // BOM so Excel reads the Urdu column as UTF-8
   const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "urdu-batch.csv";
+  a.download = "urdu-ocr.csv";
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
@@ -546,14 +603,24 @@ function elWith(tag, cls, text) {
   e.textContent = text;
   return e;
 }
+/* Copy button. The payload lives on the element (b._payload) and is read at
+   click time, so a Roman block can update it when the diacritics toggle flips
+   without rebuilding the button. */
 function copyBtn(text) {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "copy-btn";
   b.textContent = "Copy";
-  b.disabled = !text;
+  setCopyPayload(b, text);
   b.addEventListener("click", () => {
-    navigator.clipboard.writeText(text).then(() => { b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200); });
+    if (!b._payload) return;
+    navigator.clipboard.writeText(b._payload).then(() => {
+      b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200);
+    });
   });
   return b;
+}
+function setCopyPayload(b, text) {
+  b._payload = text || "";
+  b.disabled = !b._payload;
 }

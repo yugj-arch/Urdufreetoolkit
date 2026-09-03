@@ -361,6 +361,48 @@ CHAR_FOLDS.update({chr(0x06F0 + n): str(n) for n in range(10)})
 
 WORD_RE = re.compile(r"[\u0600-\u06FF]+|[^\u0600-\u06FF]+")
 
+# ---------------------------------------------------------------------------
+# 2b. Diacritic ("Rekhta-style") Roman overrides
+# ---------------------------------------------------------------------------
+# Used only when ``style="diacritic"``. Only the Roman side of a mapping
+# changes -- the Devanagari column is always the plain one. Any letter not
+# listed keeps its plain Roman. The marks are exact in the character fallback
+# because it still knows which Urdu letter it is looking at (khe vs an aspirated
+# kaf+do-chashmi-he, noon-ghunna vs noon, tte vs te). Scheme: long vowels
+# a/i/u-macron, n-tilde for noon-ghunna, k-underdot+h for khe, g-dot for ghain,
+# t/d/r-underdot for the retroflexes; aspirates stay kh/gh/th/dh/...
+_DIA_CONSONANTS = {"\u062E": "\u1E33h", "\u063A": "\u0121",
+                   "\u0679": "\u1E6D", "\u0688": "\u1E0D", "\u0691": "\u1E5B"}
+_DIA_ASPIRATED = {"\u0679": "\u1E6Dh", "\u0688": "\u1E0Dh"}
+_DIA_LONG_VOWEL = {"\u0627": "\u0101", "\u06CC": "\u012B"}   # waw -> o, bari-ye -> e unchanged
+_DIA_WORD_INITIAL = {"\u0622": "\u0101", "\u0627\u06CC": "\u012B"}
+_DIA_NOON_GHUNNA = "\u00F1"
+_DIA_STRANDED_ALIF = "\u0101"
+
+CONSONANTS_DIA = {k: (d, _DIA_CONSONANTS.get(k, r)) for k, (d, r) in CONSONANTS.items()}
+ASPIRATED_DIA = {k: (d, _DIA_ASPIRATED.get(k, r)) for k, (d, r) in ASPIRATED.items()}
+LONG_VOWEL_AFTER_CONSONANT_DIA = {
+    k: (d, _DIA_LONG_VOWEL.get(k, r)) for k, (d, r) in LONG_VOWEL_AFTER_CONSONANT.items()
+}
+WORD_INITIAL_VOWELS_DIA = {
+    k: (d, _DIA_WORD_INITIAL.get(k, r)) for k, (d, r) in WORD_INITIAL_VOWELS.items()
+}
+
+# Conservative ASCII -> diacritic transform for a *pre-baked* curated/lexicon
+# Roman value: its source letters aren't recorded, so only do what's safe --
+# lengthen doubled vowels, and nasalise a trailing "n" when (and only when) the
+# Urdu token itself ends in noon-ghunna.
+_DIA_VOWEL_SUBS = ((re.compile("aa"), "\u0101"), (re.compile("ii|ee"), "\u012B"),
+                   (re.compile("oo"), "\u016B"))
+
+
+def _diacritize_curated(core: str, roman: str) -> str:
+    for rx, repl in _DIA_VOWEL_SUBS:
+        roman = rx.sub(repl, roman)
+    if core.endswith(NOON_GHUNNA) and roman.endswith("n"):
+        roman = roman[:-1] + _DIA_NOON_GHUNNA
+    return roman
+
 
 def _fold_chars(text: str) -> str:
     """Collapse letter variants, strip kashida, ASCII-ify digits. Runs on
@@ -442,23 +484,34 @@ def _delete_roman_schwas(segs):
     return segs
 
 
-def _transliterate_word_rule_based(word: str):
+def _transliterate_word_rule_based(word: str, style: str = "plain"):
     """Character-level fallback for words not in COMMON_WORDS.
 
     Builds a ``[deva, roman, kind]`` segment list, runs Roman
     schwa-deletion over it, then joins. See ``_delete_roman_schwas``.
+
+    ``style="diacritic"`` swaps in the Rekhta-style Roman tables (ā ī ū, ñ,
+    ḳh, ġ, ṭ ḍ ṛ); the Devanagari side is identical either way.
     """
+    dia = style == "diacritic"
+    cons_tbl = CONSONANTS_DIA if dia else CONSONANTS
+    asp_tbl = ASPIRATED_DIA if dia else ASPIRATED
+    lv_tbl = LONG_VOWEL_AFTER_CONSONANT_DIA if dia else LONG_VOWEL_AFTER_CONSONANT
+    wi_tbl = WORD_INITIAL_VOWELS_DIA if dia else WORD_INITIAL_VOWELS
+    noon_r = _DIA_NOON_GHUNNA if dia else "n"
+    stranded_a_r = _DIA_STRANDED_ALIF if dia else "aa"
+
     segs: list[list] = []
     i = 0
     n = len(word)
 
     # word-initial vowel carrier
     if word[:2] in WORD_INITIAL_VOWELS:
-        d, r = WORD_INITIAL_VOWELS[word[:2]]
+        d, r = wi_tbl[word[:2]]
         segs.append([d, r, "V"])
         i = 2
     elif word[:1] in WORD_INITIAL_VOWELS:
-        d, r = WORD_INITIAL_VOWELS[word[:1]]
+        d, r = wi_tbl[word[:1]]
         segs.append([d, r, "V"])
         i = 1
 
@@ -470,10 +523,10 @@ def _transliterate_word_rule_based(word: str):
 
             # aspiration: consonant + do-chashmi he
             if nxt == DO_CHASHMI_HE and ch in ASPIRATED:
-                d_base, r_base = ASPIRATED[ch]
+                d_base, r_base = asp_tbl[ch]
                 i += 2
             else:
-                d_base, r_base = CONSONANTS[ch]
+                d_base, r_base = cons_tbl[ch]
                 i += 1
 
             # shadda geminates: کّ -> क्क / "kk"
@@ -493,7 +546,7 @@ def _transliterate_word_rule_based(word: str):
 
             # explicit long vowel letter following
             if i < n and word[i] in LONG_VOWEL_AFTER_CONSONANT:
-                d_vowel, r_vowel = LONG_VOWEL_AFTER_CONSONANT[word[i]]
+                d_vowel, r_vowel = lv_tbl[word[i]]
                 segs.append([d_base, r_base, "C"])
                 segs.append([d_vowel, r_vowel, "V"])
                 i += 1
@@ -509,7 +562,7 @@ def _transliterate_word_rule_based(word: str):
                 segs.append(["", "a", "S"])
 
         elif ch == NOON_GHUNNA:
-            segs.append(["\u0902", "n", "X"])  # anusvara
+            segs.append(["\u0902", noon_r, "X"])  # anusvara
             i += 1
 
         elif ch == AIN:
@@ -518,7 +571,7 @@ def _transliterate_word_rule_based(word: str):
         elif ch in ("\u0627", "\u0622"):
             # a long-vowel letter stranded after another vowel (\u062f\u06cc\u0627, \u0644\u0691\u06a9\u06cc\u0627\u06ba):
             # voice it as long "aa" rather than leak the raw Urdu letter.
-            segs.append(["\u0906", "aa", "V"])
+            segs.append(["\u0906", stranded_a_r, "V"])
             i += 1
 
         elif ch == "\u0648":
@@ -584,35 +637,45 @@ def _load_lexicon(path=_LEXICON_PATH) -> dict[str, tuple[str, str]]:
 _LEXICON = _load_lexicon()
 
 
-def transliterate_word_with(oov_fn, word: str):
+def transliterate_word_with(oov_fn, word: str, style: str = "plain"):
     """Curated dictionary and bundled lexicon first (both exact); only a token
     that misses both is handed to ``oov_fn`` -- the pluggable out-of-vocabulary
-    fallback. ``oov_fn(word) -> (devanagari, roman)``."""
+    fallback. ``oov_fn(word) -> (devanagari, roman)``.
+
+    In ``style="diacritic"`` a curated/lexicon hit's plain Roman value is run
+    through the conservative ``_diacritize_curated`` transform (the oov_fn is
+    expected to already emit the style it was built for)."""
     if word in COMMON_WORDS:       # curated: always wins
-        return COMMON_WORDS[word]
+        d, r = COMMON_WORDS[word]
+        return (d, _diacritize_curated(word, r)) if style == "diacritic" else (d, r)
     if word in _LEXICON:           # bundled breadth layer
-        return _LEXICON[word]
+        d, r = _LEXICON[word]
+        return (d, _diacritize_curated(word, r)) if style == "diacritic" else (d, r)
     return oov_fn(word)
 
 
-def transliterate_word(word: str):
-    return transliterate_word_with(_transliterate_word_rule_based, word)
+def transliterate_word(word: str, style: str = "plain"):
+    return transliterate_word_with(
+        lambda w: _transliterate_word_rule_based(w, style), word, style=style)
 
 
-def transliterate_with(oov_fn, text: str):
+def transliterate_with(oov_fn, text: str, style: str = "plain"):
     """Same pipeline as :func:`transliterate` (normalize -> tokenize -> curated
     dict -> lexicon -> fallback -> per-script punctuation), but the
     out-of-vocabulary word fallback is pluggable. The Aksharamukha provider
     passes an Aksharamukha-backed ``oov_fn`` here instead of the built-in
     character rules, while keeping the shared curated/lexicon/punctuation
-    layers identical to the rule engine."""
+    layers identical to the rule engine.
+
+    ``style`` is forwarded to the shared curated/lexicon layer; the caller is
+    responsible for building ``oov_fn`` in the matching style."""
     text = normalize_urdu(text)
     deva_parts, roman_parts = [], []
     for token in WORD_RE.findall(text):
         if re.match(r"[\u0600-\u06FF]+", token):
             prefix, core, suffix = _split_leading_trailing_punct(token)
             if core:
-                d, r = transliterate_word_with(oov_fn, core)
+                d, r = transliterate_word_with(oov_fn, core, style=style)
             else:
                 d, r = "", ""
             deva_parts.append(_render_punct(prefix, True) + d
@@ -625,9 +688,14 @@ def transliterate_with(oov_fn, text: str):
     return "".join(deva_parts), "".join(roman_parts)
 
 
-def transliterate(text: str):
-    """Main entry point. Returns (devanagari_text, roman_text)."""
-    return transliterate_with(_transliterate_word_rule_based, text)
+def transliterate(text: str, style: str = "plain"):
+    """Main entry point. Returns (devanagari_text, roman_text).
+
+    ``style="diacritic"`` marks the Roman side Rekhta-style (ā ī ū, ñ, ḳh, ġ,
+    ṭ ḍ ṛ); the Devanagari side is unaffected. Default ``"plain"`` is the
+    long-standing plain-ASCII output, unchanged."""
+    return transliterate_with(
+        lambda w: _transliterate_word_rule_based(w, style), text, style=style)
 
 
 # ---------------------------------------------------------------------------

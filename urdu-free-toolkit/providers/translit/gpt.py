@@ -51,7 +51,8 @@ class GptTranslit(BaseProvider):
         d = t["value"]
         return TranslitResult(provider_id=self.info.id, ok=True, ms=t["ms"],
                               devanagari=(d.get("devanagari") or "").strip(),
-                              roman=(d.get("roman") or "").strip())
+                              roman=(d.get("roman") or "").strip(),
+                              roman_diacritic=(d.get("roman_diacritic") or "").strip())
 
 
 PROVIDER = GptTranslit()
