@@ -1,5 +1,6 @@
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from providers import registry
 from providers.base import Capability, Result, BaseProvider, ProviderInfo
@@ -102,3 +103,41 @@ def test_api_engine_still_overlaps_offline(monkeypatch):
     assert all(r.ok for r in out)
     assert _Overlap.max_live == 2          # ran together
     assert elapsed < 0.6                   # ~0.3s, not 0.6s serialized
+
+
+class _OverlapTr(_Overlap):
+    """An _Overlap whose capability is TRANSLIT rather than OCR."""
+
+    def __init__(self, pid, kind, secs=0.3):
+        super().__init__(pid, kind, secs)
+        self.info = ProviderInfo(id=pid, label=pid,
+                                 capability=Capability.TRANSLIT, kind=kind)
+
+
+def test_offline_translit_engines_are_not_serialized(monkeypatch):
+    """Offline transliteration engines are plain string transforms with no ML
+    runtime — they must run in parallel, not queue on the OCR inference lock."""
+    _Overlap.live = _Overlap.max_live = 0
+    _install(monkeypatch, [_OverlapTr("rule", "offline"), _OverlapTr("uroman", "offline")])
+    out = runner.run(Capability.TRANSLIT, ["rule", "uroman"], lambda p: p.go(), timeout_s=5)
+    assert all(r.ok for r in out)
+    assert _Overlap.max_live == 2          # ran together, lock not taken
+
+
+def test_offline_translit_overlaps_offline_ocr(monkeypatch):
+    """A trivial offline transliteration must not wait out a slow offline OCR
+    model load holding _OFFLINE_LOCK — the button greys for the whole wait."""
+    _Overlap.live = _Overlap.max_live = 0
+    _install(monkeypatch, [_Overlap("paddle", "offline", secs=0.5),
+                           _OverlapTr("rule", "offline", secs=0.05)])
+    start = time.monotonic()
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_ocr = ex.submit(runner.run, Capability.OCR, ["paddle"],
+                          lambda p: p.go(), 5)
+        time.sleep(0.05)  # let the OCR worker take the lock first
+        f_tr = ex.submit(runner.run, Capability.TRANSLIT, ["rule"],
+                         lambda p: p.go(), 5)
+        assert f_tr.result()[0].ok
+        tr_done = time.monotonic() - start
+        assert f_ocr.result()[0].ok
+    assert tr_done < 0.3  # translit returned while OCR (0.5s) was still running

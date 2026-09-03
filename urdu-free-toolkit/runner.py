@@ -7,14 +7,19 @@ provider raising or hanging never blocks the others — its row comes back with
 ``ok=False`` and an ``error`` string, and a timed-out worker is abandoned
 (``cancel_futures``) rather than awaited.
 
-Offline engines (PaddleOCR, PyTorch/EasyOCR, Surya, …) each bundle their own
-native runtime — OpenMP, BLAS, threadpools. Two of them running inference in
+Offline **OCR** engines (PaddleOCR, PyTorch/EasyOCR, Surya, …) each bundle their
+own native runtime — OpenMP, BLAS, threadpools. Two of them running inference in
 different worker threads at the same time deadlocks the process: the wedged
 native threads never drop the GIL, so *every* Python thread in the request
-starves and unrelated API engines in the same batch time out too. So offline
+starves and unrelated API engines in the same batch time out too. So offline OCR
 engines are serialized against each other via ``_OFFLINE_LOCK`` while API
-engines (pure network I/O) still run fully in parallel — and one offline engine
-still overlaps the API ones.
+engines (pure network I/O) still run fully in parallel — and one offline OCR
+engine still overlaps the API ones.
+
+The offline *transliteration* engines (rule, uroman, ICU, Aksharamukha) are
+plain string transforms with no ML runtime — they are **not** serialized, so a
+one-millisecond ``rule`` transliteration never has to wait out a 50-second
+PaddleOCR model load queued ahead of it on the lock.
 """
 from __future__ import annotations
 
@@ -40,10 +45,19 @@ def _resolve(capability: Capability, pid: str) -> BaseProvider | None:
         return None
 
 
+def _serialized(prov: BaseProvider) -> bool:
+    """True for engines that must not run alongside another of their kind — the
+    offline OCR engines with a bundled native ML runtime. Offline transliteration
+    engines are lightweight string transforms and run freely."""
+    info = prov.info
+    return getattr(info, "kind", "") == "offline" and info.capability == Capability.OCR
+
+
 def _invoke(prov: BaseProvider, call: Callable[[BaseProvider], Result]) -> Result:
-    """Run ``call(prov)``, holding ``_OFFLINE_LOCK`` for offline engines so no two
-    native inference runs overlap. API engines are unaffected."""
-    if getattr(prov.info, "kind", "") == "offline":
+    """Run ``call(prov)``, holding ``_OFFLINE_LOCK`` for offline OCR engines so no
+    two native inference runs overlap. API and transliteration engines are
+    unaffected."""
+    if _serialized(prov):
         with _OFFLINE_LOCK:
             return call(prov)
     return call(prov)
