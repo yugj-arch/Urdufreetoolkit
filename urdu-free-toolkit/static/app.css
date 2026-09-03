@@ -212,12 +212,12 @@ button.ghost:hover { border-color: var(--accent); color: var(--accent); }
 /* ---------- results ---------- */
 /* Cards wrap into a tidy grid — no sideways scrolling to hunt for a result. */
 .columns {
-  display: grid; gap: 16px; margin-top: 18px; align-items: start;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  display: grid; gap: 22px; margin-top: 32px; margin-bottom: 6px; align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
 }
 .col {
-  border: 1px solid var(--line); border-radius: 14px; padding: 18px;
-  background: var(--surface); display: flex; flex-direction: column; gap: 14px;
+  border: 1px solid var(--line); border-radius: 14px; padding: clamp(20px, 2.5vw, 26px) 14px;
+  background: var(--surface); display: flex; flex-direction: column; gap: 18px;
 }
 .col.is-error { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
 .col h3 {
@@ -226,24 +226,24 @@ button.ghost:hover { border-color: var(--accent); color: var(--accent); }
 }
 .col .ms { color: var(--ink-3); font-weight: 400; font-family: var(--mono); font-size: 11px; }
 
-.field { display: flex; flex-direction: column; gap: 6px; }
+.field { display: flex; flex-direction: column; gap: 9px; }
 .field-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .lab {
   font-family: var(--mono); font-size: 10px; text-transform: uppercase;
   letter-spacing: .12em; color: var(--ink-3);
 }
 
-.col textarea { min-height: 72px; }
+.col textarea { min-height: 96px; }
 
 /* The result line, set like a printed couplet: centred, airy, generous spacing. */
 .out {
   background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 10px;
-  padding: 18px 16px; text-align: center;
-  font-family: var(--deva); font-size: 21px; line-height: 2.05;
+  padding: 24px 14px; text-align: center;
+  font-family: var(--deva); font-size: 27px; line-height: 2.05;
   white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
 }
 .out.roman {
-  font-family: var(--serif); font-size: 20px; line-height: 2.25;
+  font-family: var(--serif); font-size: 25px; line-height: 2.25;
   letter-spacing: .01em; word-spacing: .22em; color: var(--ink);
 }
 
@@ -251,8 +251,8 @@ button.ghost:hover { border-color: var(--accent); color: var(--accent); }
 body[data-script="roman"] .columns .field--deva,
 body[data-script="deva"]  .columns .field--roman { display: none; }
 /* When a single script is chosen the line gets the full spotlight. */
-body:not([data-script="both"]) .columns .out { font-size: 23px; padding: 24px 18px; }
-body:not([data-script="both"]) .columns .out.roman { font-size: 22px; }
+body:not([data-script="both"]) .columns .out { font-size: 32px; padding: 28px 16px; }
+body:not([data-script="both"]) .columns .out.roman { font-size: 29px; }
 body:not([data-script="both"]) .columns .field .lab { display: none; }
 body:not([data-script="both"]) .columns .field-head { justify-content: flex-end; }
 
