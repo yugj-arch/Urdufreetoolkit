@@ -14,3 +14,5 @@ models/
 training/synth/fonts/*
 !training/synth/fonts/.gitkeep
 *.lmdb
+*.log
+*.out

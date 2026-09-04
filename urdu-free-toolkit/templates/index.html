@@ -1,126 +1,92 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Urdu Toolkit — compare engines</title>
+<title>Urdu Toolkit — read it like a ghazal</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
 
-<div class="topbar">
+<header class="topbar">
   <a class="brand" href="/">
     <span class="mark" dir="rtl">اردو</span>
     <span class="name">Urdu Toolkit</span>
   </a>
-  <span class="tagline">image &rarr; Urdu &rarr; Devanagari &amp; Roman</span>
-  <span class="spacer"></span>
-  <div class="scripttoggle" id="script-toggle" role="group" aria-label="Script shown in results">
-    <button type="button" data-script="roman">Roman</button>
-    <button type="button" data-script="deva">Devanagari</button>
-    <button type="button" data-script="both">Both</button>
-  </div>
-  <div class="scripttoggle" id="diacritics-toggle" role="group" aria-label="Roman spelling">
-    <button type="button" data-dia="off">Plain</button>
-    <button type="button" data-dia="on" title="Rekhta-style marks: ā ī ū ñ ḳh ġ">Diacritics</button>
-  </div>
-  <button id="settings-btn" class="ghost" type="button">Settings</button>
-</div>
+</header>
 
-<div class="wrap">
-  <header class="hero">
-    <div class="kicker">Free · offline-first · compare engines</div>
+<main class="wrap">
+  <div class="lede">
     <h1>Urdu Toolkit</h1>
-    <p class="sub">Pull Urdu out of an image, transliterate it to Devanagari and Roman,
-      and run several engines side by side to see which one reads the line best.</p>
-  </header>
-
-  <section class="step" id="step-ocr">
-    <div class="card">
-      <h2><span class="num">1</span>Read Urdu from image(s)</h2>
-      <p class="dim">Drop one image or a whole set — the engines below read the Urdu off
-        each. Offline engines run on this computer and need no key. Send the text down
-        to step 2 to turn it into Devanagari &amp; Roman.</p>
-
-      <div class="engines" id="ocr-engines"><p class="dim">Loading engines…</p></div>
-      <div class="quick">
-        <button type="button" class="chip" data-pick="ocr:offline">All offline</button>
-        <button type="button" class="chip" data-pick="ocr:recommended">Recommended</button>
-        <button type="button" class="chip" data-pick="ocr:none">Clear</button>
-      </div>
-
-      <label class="dropzone" id="dropzone">
-        <input type="file" id="file-input" accept="image/*" multiple hidden>
-        <span id="drop-label"><strong>Click or drop</strong> image(s) (JPG / PNG)</span>
-        <img id="preview" alt="">
-      </label>
-      <div id="image-queue"><p class="dim">No images added.</p></div>
-
-      <button id="run-ocr" class="primary" type="button" disabled>Read image(s)</button>
-      <div id="ocr-progress" class="dim" hidden></div>
-
-      <div class="columns" id="ocr-columns"></div>
-
-      <div id="batch-results" class="batch-table-wrap" hidden>
-        <table>
-          <thead>
-            <tr>
-              <th>File</th><th>OCR engine</th><th>Urdu</th><th>ms</th><th>Error</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-        <button id="batch-csv" class="ghost" type="button" hidden>Download CSV</button>
-      </div>
-    </div>
-  </section>
-
-  <div class="rule"><span>&#10022;</span></div>
-
-  <section class="step" id="step-translit">
-    <div class="card" id="translit-card">
-      <h2><span class="num">2</span>Turn it into Devanagari &amp; Roman</h2>
-      <p class="dim">Type or paste Urdu here — or use the button on a result above.
-        Fix any wrong letters first, then hit the button.</p>
-      <textarea id="urdu-input" dir="rtl" placeholder="یہاں اردو لکھیں…"></textarea>
-      <div class="engines" id="translit-engines"><p class="dim">Loading engines…</p></div>
-      <div class="quick">
-        <button type="button" class="chip" data-pick="translit:offline">All offline</button>
-        <button type="button" class="chip" data-pick="translit:recommended">Recommended</button>
-        <button type="button" class="chip" data-pick="translit:none">Clear</button>
-      </div>
-      <div class="row">
-        <button id="run-translit" class="primary" type="button">Transliterate</button>
-        <span class="row-hint">Roman spelling follows the <strong>Plain / Diacritics</strong> switch up top.</span>
-      </div>
-      <div class="columns" id="translit-columns"></div>
-    </div>
-  </section>
-
-  <div class="rule"><span>&#10022;</span></div>
-  <footer>Offline engines run entirely on this machine. API engines send your image or text to that provider.</footer>
-</div>
-
-<div class="modal" id="settings-modal" hidden>
-  <div class="modal-body">
-    <h2>Settings — API keys</h2>
-    <p class="dim">Written to a local <code>.env</code> file next to the app. Offline
-      engines need none of these. A field showing “set” already has a value — leave it
-      blank to keep it, or type a new value to replace it.</p>
-    <p class="dim" id="settings-readonly-note" hidden>This site runs on a read-only
-      host — keys are set as environment variables in the Vercel project, not from
-      here. The list below just shows which are configured.</p>
-    <div id="settings-fields"></div>
-    <div class="row">
-      <button id="save-settings" class="primary" type="button">Save</button>
-      <button id="close-settings" class="ghost" type="button">Close</button>
-    </div>
-    <div id="settings-status" class="dim"></div>
-    <h3 class="settings-sub">Engines &amp; pricing</h3>
-    <p class="dim">Rough per-call cost. Offline engines run on this machine for free;
-      API estimates assume one short image or line and drift with provider pricing.</p>
-    <div id="settings-engines"></div>
+    <p>Read Urdu off an image, then see it in Devanagari and Roman — set like a ghazal.</p>
   </div>
+
+  <section class="panel" id="step-ocr">
+    <h2 class="panel-h"><span class="step-n">1</span> Read Urdu from an image</h2>
+    <label class="dropzone" id="dropzone">
+      <input type="file" id="file-input" accept="image/*" hidden>
+      <span id="drop-label"><strong>Click or drop</strong> an image (JPG / PNG)</span>
+      <img id="preview" alt="" hidden>
+    </label>
+    <div class="engines" id="ocr-engines"><p class="hint">Loading engines…</p></div>
+    <div class="quick">
+      <button type="button" class="chip" data-pick="ocr:recommended">Recommended</button>
+      <button type="button" class="chip" data-pick="ocr:none">Clear</button>
+    </div>
+    <div class="row">
+      <button id="run-ocr" class="btn-primary" type="button" disabled>Read image</button>
+    </div>
+    <p class="err" id="ocr-err" hidden></p>
+    <div class="ocr-out" id="ocr-out" hidden></div>
+  </section>
+
+  <section class="panel" id="step-translit">
+    <h2 class="panel-h"><span class="step-n">2</span> Turn it into Devanagari &amp; Roman</h2>
+    <p class="hint">Type or paste Urdu — or send it down from step&nbsp;1. One line per misra.</p>
+    <textarea id="urdu-input" dir="rtl" placeholder="یہاں اردو لکھیں…"></textarea>
+    <div class="engines" id="translit-engines"><p class="hint">Loading engines…</p></div>
+    <div class="quick">
+      <button type="button" class="chip" data-pick="translit:recommended">Recommended</button>
+      <button type="button" class="chip" data-pick="translit:none">Clear</button>
+    </div>
+    <div class="row">
+      <button id="run-translit" class="btn-primary" type="button">Transliterate</button>
+    </div>
+    <p class="err" id="tr-err" hidden></p>
+  </section>
+
+  <section id="reader" hidden>
+    <div class="reader-engines" id="reader-engines" role="group" aria-label="Engine" hidden></div>
+    <div class="reader-bar">
+      <div class="seg" id="script-switch" role="group" aria-label="Script">
+        <button type="button" data-s="ur" class="on" lang="ur">اردو</button>
+        <button type="button" data-s="hi" lang="hi">हिंदी</button>
+        <button type="button" data-s="ro">Roman</button>
+      </div>
+      <div class="seg" id="size-switch" role="group" aria-label="Text size">
+        <button type="button" data-z="-" aria-label="Smaller text">A&minus;</button>
+        <button type="button" data-z="+" aria-label="Larger text">A+</button>
+      </div>
+      <div class="seg" id="dia-switch" role="group" aria-label="Roman spelling">
+        <button type="button" data-d="off" class="on">Plain</button>
+        <button type="button" data-d="on" title="Rekhta-style marks: ā ī ū ñ ḳh ġ">Diacritics</button>
+      </div>
+    </div>
+    <div id="ghazal" data-script="ur"></div>
+    <p class="reader-foot" id="reader-foot"></p>
+  </section>
+
+  <footer class="page-foot">
+    Offline engines run entirely on this machine. API engines send your image or text to that provider.
+  </footer>
+</main>
+
+<div id="word-pop" hidden role="dialog" aria-label="Word">
+  <button class="wp-close" id="wp-close" type="button" aria-label="Close">&times;</button>
+  <div class="wp-row"><span class="wp-lab" lang="ur">اردو</span><span class="wp-val" data-k="ur" dir="rtl"></span></div>
+  <div class="wp-row"><span class="wp-lab" lang="hi">हिंदी</span><span class="wp-val" data-k="hi"></span></div>
+  <div class="wp-row"><span class="wp-lab">Roman</span><span class="wp-val" data-k="ro"></span></div>
+  <div class="wp-row wp-row--dia"><span class="wp-lab">Roman&nbsp;+</span><span class="wp-val" data-k="rod"></span></div>
 </div>
 
 <script src="{{ url_for('static', filename='app.js') }}"></script>

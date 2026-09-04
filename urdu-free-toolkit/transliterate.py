@@ -241,8 +241,9 @@ _RAW_COMMON_WORDS: dict[str, tuple[str, str]] = {
     "بعد": ("बाद", "baad"),
     "شروع": ("शुरू", "shuru"),
     # high-frequency function words in the reference sentences: the rule
-    # heuristic happens to romanise these right, but uroman skeletonises them
-    # (jw/tk/kr) -- curating them makes every engine agree with GPT.
+    # heuristic happens to romanise these right, but a bare romanizer
+    # skeletonises them (jw/tk/kr) -- curating them makes every engine agree
+    # with GPT.
     "جو": ("जो", "jo"),
     "تک": ("तक", "tak"),
     "لے": ("ले", "le"),

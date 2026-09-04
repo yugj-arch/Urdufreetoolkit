@@ -118,8 +118,8 @@ def test_offline_translit_engines_are_not_serialized(monkeypatch):
     """Offline transliteration engines are plain string transforms with no ML
     runtime — they must run in parallel, not queue on the OCR inference lock."""
     _Overlap.live = _Overlap.max_live = 0
-    _install(monkeypatch, [_OverlapTr("rule", "offline"), _OverlapTr("uroman", "offline")])
-    out = runner.run(Capability.TRANSLIT, ["rule", "uroman"], lambda p: p.go(), timeout_s=5)
+    _install(monkeypatch, [_OverlapTr("rule", "offline"), _OverlapTr("aksharamukha", "offline")])
+    out = runner.run(Capability.TRANSLIT, ["rule", "aksharamukha"], lambda p: p.go(), timeout_s=5)
     assert all(r.ok for r in out)
     assert _Overlap.max_live == 2          # ran together, lock not taken
 

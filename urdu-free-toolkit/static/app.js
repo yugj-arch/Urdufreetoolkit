@@ -1,370 +1,153 @@
 /* Urdu Toolkit front-end. No dependencies. Talks to:
-   GET  /api/config           -> runtime flags (batch cap, settings read-only)
-   GET  /api/providers        -> engine lists per capability
-   POST /api/ocr              -> SSE stream, one row per engine (single image)
-   POST /api/transliterate    -> {results:[...]}
-   POST /api/batch            -> SSE stream, one row per (file x ocr engine) for many images
-   GET/POST /api/settings     -> API-key status / save
+   GET  /api/config        -> runtime flags (settings read-only on Vercel)
+   GET  /api/providers     -> engine lists per capability
+   POST /api/ocr           -> SSE stream, one row per engine (single image)
+   POST /api/transliterate -> {results:[...]}  (also used for one-word lookups)
+   GET/POST /api/settings   -> API-key status / save
+
+   The tool is two steps — read an image, then transliterate — and the result
+   is shown as a Rekhta-style ghazal: couplet sets, a اردو / हिंदी / Roman
+   switch that repaints in place, a text-size control, per-couplet copy /
+   "download as card", and tap-a-word to see that word in every script.
 */
 "use strict";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-/* Engine ids the "Recommended" chip ticks per step — also what loadProviders()
-   pre-selects on load. If none of them are available (e.g. an API key isn't
-   set), loadProviders() falls back to the first engine that actually works. */
-const RECOMMENDED = {
-  ocr: ["gcv"],
-  translit: ["rule"],
-};
+/* The engines each step pre-ticks on load: the recommended ones that are
+   available, else the first working engine of that kind. You can tick more than
+   one per step to compare them side by side. */
+const RECOMMENDED = { ocr: ["gcv"], translit: ["rule"] };
+
+const ZOOM = { min: 0.7, max: 1.9, step: 0.15 };
 
 const state = {
-  images: [],     // File[] added to the reader — one image or many
   providers: { ocr: [], translit: [] },
-  batchRows: [],  // accumulated result rows, for the CSV download (multi-image runs)
-  config: { on_vercel: false, batch_max_files: 30, settings_readonly: false },
-  diacritics: false,  // Roman spelling: false = plain ASCII, true = Rekhta-style marks
+  engines: { ocr: [], translit: [] },   // ticked engine ids per step
+  config: { settings_readonly: false },
+  script: "ur",          // ur | hi | ro   — which script the reader shows
+  diacritics: false,     // Roman spelling: false = plain, true = Rekhta marks
+  scale: 1,              // reader text size multiplier
+  results: {},           // engine id -> { ur:[], hi:[], ro:[], rod:[], ms } (step 2)
+  activeEngine: null,    // which engine's ghazal the reader is showing
+  result: null,          // results[activeEngine] — the lines the reader renders
+  wordCache: {},         // urdu token -> { ur, hi, ro, rod }
+  ready: null,           // promise: provider discovery finished
+  file: null,            // the image queued in step 1
 };
 
 /* ---------- boot ---------- */
 document.addEventListener("DOMContentLoaded", () => {
   wireDropzone();
   wireSettings();
-  wireScriptToggle();
-  wireDiacriticsToggle();
+  wireReaderControls();
+  wireWordPop();
+  wireQuickChips();
+  wireReaderEngines();
   $("#run-ocr").addEventListener("click", runOcr);
   $("#run-translit").addEventListener("click", runTranslit);
-  $("#batch-csv").addEventListener("click", downloadBatchCsv);
-  $$("[data-pick]").forEach((b) => b.addEventListener("click", () => pick(b.dataset.pick)));
+
+  try { state.diacritics = localStorage.getItem("urdu.diacritics") === "on"; } catch (e) {}
+  try { state.scale = clampZoom(parseFloat(localStorage.getItem("urdu.readerScale")) || 1); } catch (e) {}
+  try { state.script = ["ur", "hi", "ro"].includes(localStorage.getItem("urdu.script"))
+        ? localStorage.getItem("urdu.script") : "ur"; } catch (e) {}
+
   loadConfig();
-  loadProviders();
+  state.ready = loadProviders();   // first call warms provider discovery — can take a second
 });
-
-/* ---------- script toggle (Roman / Devanagari / Both) ---------- */
-/* Mirrors Rekhta's ENG/HIN/URD switch: picks which script the result cards
-   show. Pure CSS does the hiding via body[data-script]; choice is remembered. */
-function wireScriptToggle() {
-  const box = $("#script-toggle");
-  if (!box) return;
-  let saved = "both";
-  try { saved = localStorage.getItem("urdu.script") || "both"; } catch (e) {}
-  setScript(saved);
-  $$("#script-toggle button").forEach((b) =>
-    b.addEventListener("click", () => setScript(b.dataset.script)));
-}
-
-function setScript(v) {
-  if (!["roman", "deva", "both"].includes(v)) v = "both";
-  document.body.dataset.script = v;
-  try { localStorage.setItem("urdu.script", v); } catch (e) {}
-  $$("#script-toggle button").forEach((b) => {
-    const on = b.dataset.script === v;
-    b.classList.toggle("on", on);
-    b.setAttribute("aria-pressed", on ? "true" : "false");
-  });
-}
-
-/* ---------- diacritics toggle (Plain / Diacritics) ---------- */
-/* Picks the Roman spelling shown: plain ASCII ("khraab") or Rekhta-style marks
-   ("ḳharāb"). Every result already carries BOTH spellings, so flipping this
-   just repaints the Roman blocks on screen — no re-run. Choice is remembered.
-   Devanagari is unaffected. */
-function wireDiacriticsToggle() {
-  const box = $("#diacritics-toggle");
-  if (!box) return;
-  let saved = "off";
-  try { saved = localStorage.getItem("urdu.diacritics") || "off"; } catch (e) {}
-  setDiacritics(saved === "on");
-  $$("#diacritics-toggle button").forEach((b) =>
-    b.addEventListener("click", () => setDiacritics(b.dataset.dia === "on")));
-}
-
-function setDiacritics(on) {
-  state.diacritics = !!on;
-  try { localStorage.setItem("urdu.diacritics", on ? "on" : "off"); } catch (e) {}
-  $$("#diacritics-toggle button").forEach((b) => {
-    const sel = (b.dataset.dia === "on") === state.diacritics;
-    b.classList.toggle("on", sel);
-    b.setAttribute("aria-pressed", sel ? "true" : "false");
-  });
-  refreshRomanFields();
-}
 
 /* ---------- runtime config ---------- */
 async function loadConfig() {
   try {
     const res = await fetch("/api/config");
     if (res.ok) Object.assign(state.config, await res.json());
-  } catch (e) { /* keep the local defaults */ }
-  applyConfig();
-}
-
-/* Reflect the server flags in the UI: the image queue shows the per-run cap that
-   comes back from /api/config (30 locally, fewer on Vercel). */
-function applyConfig() {
-  renderQueue();
+  } catch (e) { /* keep local defaults */ }
 }
 
 /* ---------- providers ---------- */
+const ENGINE_BOX = { ocr: "#ocr-engines", translit: "#translit-engines" };
+
 async function loadProviders() {
   try {
-    const res = await fetch("/api/providers");
-    state.providers = await res.json();
+    state.providers = await (await fetch("/api/providers")).json();
   } catch (e) {
-    $("#ocr-engines").innerHTML = '<p class="err">Could not load engines: ' + esc(e.message) + "</p>";
+    $("#ocr-engines").innerHTML = '<p class="err">Could not load engines.</p>';
     return;
   }
-  renderEngineList("ocr", "#ocr-engines");
-  renderEngineList("translit", "#translit-engines");
-  // Start with a working default so the page is usable without touching engines:
-  // the recommended engine, else the first one that's actually available.
-  ["ocr", "translit"].forEach((c) => {
-    if (!checkedIds(c).length) pick(c + ":recommended");
-    if (!checkedIds(c).length) checkFirstAvailable(c);
-  });
+  renderEngineList("ocr");
+  renderEngineList("translit");
 }
 
-/* Tick the first engine in the list that isn't disabled — the fallback when
-   no recommended engine can run (no API keys, model not downloaded, …). */
-function checkFirstAvailable(cap) {
-  const box = $$(`input[data-cap="${cap}"]`).find((b) => !b.disabled);
-  if (box) box.checked = true;
-}
-
-/* `capAttr` overrides the value written to each checkbox's data-cap; kept as a
-   hook for reusing the same engine list under a second picker. */
-function renderEngineList(cap, sel, capAttr = cap) {
-  const box = $(sel);
+/* The tickable engine list for a step. Unavailable engines (no API key) show
+   greyed out with the reason, so you can see what a key would unlock. After
+   drawing, settle on a sensible set of ticks. */
+function renderEngineList(cap) {
+  const box = $(ENGINE_BOX[cap]);
+  if (!box) return;
   const rows = state.providers[cap] || [];
-  if (!rows.length) { box.innerHTML = '<p class="dim">No engines found for this step.</p>'; return; }
+  if (!rows.length) { box.innerHTML = '<p class="hint">No engines found for this step.</p>'; return; }
+
   box.innerHTML = rows.map((r) => {
-    const dis = r.available ? "" : "disabled";
-    const off = r.available ? "" : "off";
+    const off = r.available ? "" : " off";
+    const dis = r.available ? "" : " disabled";
     const reason = r.available ? "" : ` title="${esc(r.reason || "unavailable")}"`;
-    return `<label class="eng ${off}"${reason}>
-      <input type="checkbox" value="${esc(r.id)}" data-cap="${capAttr}" ${dis}>
+    return `<label class="eng${off}"${reason}>
+      <input type="checkbox" value="${esc(r.id)}" data-cap="${cap}"${dis}>
       <span>
-        <span class="lbl">${esc(r.label)}</span><span class="badge-tag">${esc(r.badge)}</span>
+        <span class="lbl">${esc(r.label)}</span><span class="badge-tag">${esc(r.badge || "")}</span>
         ${r.price ? `<span class="price-tag">${esc(r.price)}</span>` : ""}
         ${r.note ? `<span class="note">${esc(r.note)}</span>` : ""}
-        ${r.available ? "" : `<span class="note">${esc(r.reason || "")}</span>`}
+        ${r.available ? "" : `<span class="note">${esc(r.reason || "needs an API key")}</span>`}
       </span>
     </label>`;
   }).join("");
+
+  box.querySelectorAll('input[type="checkbox"]').forEach((b) =>
+    b.addEventListener("change", () => saveEngines(cap)));
+  restoreEngines(cap);
 }
 
-/* Read-only "what each engine costs" table inside the Settings modal. */
-function renderSettingsEngines() {
-  const box = $("#settings-engines");
-  if (!box) return;
-  const groups = [["ocr", "OCR"], ["translit", "Transliterate"]];
-  box.innerHTML = groups.map(([cap, title]) => {
-    const rows = state.providers[cap] || [];
-    if (!rows.length) return "";
-    return `<div class="eng-price-group"><strong>${esc(title)}</strong>` +
-      rows.map((r) => `<div class="eng-price-row"><span>${esc(r.label)}</span>` +
-        `<span class="price-tag">${esc(r.price || "—")}</span></div>`).join("") +
-      `</div>`;
-  }).join("");
+/* Tick the set remembered from last time (dropping any that can't run now); if
+   that leaves nothing, tick the recommended engine, else the first that works. */
+function restoreEngines(cap) {
+  const rows = state.providers[cap] || [];
+  const avail = new Set(rows.filter((r) => r.available).map((r) => r.id));
+  let want = savedEngines(cap).filter((id) => avail.has(id));
+  if (!want.length) {
+    const rec = (RECOMMENDED[cap] || []).filter((id) => avail.has(id));
+    want = rec.length ? rec : (avail.size ? [[...avail][0]] : []);
+  }
+  setChecked(cap, want);
+  state.engines[cap] = checkedIds(cap);
 }
 
 function checkedIds(cap) {
   return $$(`input[data-cap="${cap}"]:checked`).map((c) => c.value);
 }
-
-function pick(spec) {
-  const [cap, what] = spec.split(":");
-  $$(`input[data-cap="${cap}"]`).forEach((b) => {
-    if (b.disabled) { b.checked = false; return; }
-    if (what === "none") b.checked = false;
-    else if (what === "offline") {
-      const row = (state.providers[cap] || []).find((r) => r.id === b.value);
-      b.checked = !!row && row.badge === "offline";
-    } else if (what === "recommended") {
-      b.checked = (RECOMMENDED[cap] || []).includes(b.value);
-    }
-  });
+function setChecked(cap, ids) {
+  const on = new Set(ids);
+  $$(`input[data-cap="${cap}"]`).forEach((c) => { c.checked = !c.disabled && on.has(c.value); });
+}
+function saveEngines(cap) {
+  state.engines[cap] = checkedIds(cap);
+  try { localStorage.setItem("urdu.engines." + cap, state.engines[cap].join(",")); } catch (e) {}
+}
+function savedEngines(cap) {
+  try { return (localStorage.getItem("urdu.engines." + cap) || "").split(",").filter(Boolean); }
+  catch (e) { return []; }
 }
 
-/* ---------- image reader (one image or many) ---------- */
-function wireDropzone() {
-  const dz = $("#dropzone");
-  const input = $("#file-input");
-  input.addEventListener("change", () => { addImages(input.files); input.value = ""; });
-  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
-  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
-  dz.addEventListener("drop", (e) => {
-    e.preventDefault(); dz.classList.remove("drag");
-    addImages(e.dataTransfer.files);
-  });
-}
-
-/* Per-run cap from GET /api/config — 30 locally, fewer on Vercel where the
-   request body is capped at ~4.5 MB. */
-const batchMax = () => state.config.batch_max_files || 30;
-
-function addImages(fileList) {
-  for (const f of fileList) {
-    if (!f.type.startsWith("image/")) continue;
-    if (state.images.length >= batchMax()) break;
-    if (state.images.some((x) => x.name === f.name && x.size === f.size)) continue;
-    state.images.push(f);
-  }
-  renderQueue();
-}
-
-/* Draw the queue under the dropzone. One image: show its preview and keep the
-   familiar single-image feel. Many: hide the preview, list the files with a
-   remove button each. The Run button follows whether anything is queued. */
-function renderQueue() {
-  const box = $("#image-queue");
-  const label = $("#drop-label");
-  const preview = $("#preview");
-  const n = state.images.length;
-  $("#run-ocr").disabled = n === 0;
-
-  if (!n) {
-    box.innerHTML = '<p class="dim">No images added.</p>';
-    if (preview) { preview.src = ""; preview.style.display = "none"; }
-    if (label) label.innerHTML =
-      `<strong>Click or drop</strong> image(s) (JPG / PNG) — up to ${batchMax()}`;
-    return;
-  }
-
-  if (n === 1 && preview) {
-    const rd = new FileReader();
-    rd.onload = () => { preview.src = rd.result; preview.style.display = "block"; };
-    rd.readAsDataURL(state.images[0]);
-    if (label) label.innerHTML =
-      "<strong>" + esc(state.images[0].name) + "</strong> — click to add more";
-  } else {
-    if (preview) { preview.src = ""; preview.style.display = "none"; }
-    if (label) label.innerHTML =
-      `<strong>Click or drop</strong> to add more (JPG / PNG) — up to ${batchMax()}`;
-  }
-
-  box.innerHTML =
-    `<p class="dim">${n} image${n === 1 ? "" : "s"} ready` +
-    (n >= batchMax() ? ` (max ${batchMax()})` : "") + `</p>` +
-    state.images.map((f, i) =>
-      `<div class="batch-file"><span>${esc(f.name)}</span>` +
-      `<button type="button" data-rm="${i}">&times;</button></div>`).join("");
-  $$("#image-queue [data-rm]").forEach((b) => b.addEventListener("click", () => {
-    state.images.splice(Number(b.dataset.rm), 1);
-    renderQueue();
+/* The "Recommended" / "Clear" chips under each list. */
+function wireQuickChips() {
+  $$("[data-pick]").forEach((b) => b.addEventListener("click", () => {
+    const [cap, what] = b.dataset.pick.split(":");
+    const rows = state.providers[cap] || [];
+    const avail = new Set(rows.filter((r) => r.available).map((r) => r.id));
+    if (what === "none") setChecked(cap, []);
+    else if (what === "recommended") setChecked(cap, (RECOMMENDED[cap] || []).filter((id) => avail.has(id)));
+    saveEngines(cap);
   }));
-}
-
-/* ---------- read image(s) ---------- */
-/* One image -> POST /api/ocr, rich side-by-side cards with an editable Urdu box
-   and a "use this text" button that hands it to step 2. Two or more ->
-   POST /api/batch, one table row per (file x engine) you can export as CSV. */
-async function runOcr() {
-  const ids = checkedIds("ocr");
-  if (!state.images.length) return alert("Add an image first.");
-  if (!ids.length) return alert("Tick at least one OCR engine.");
-  if (state.images.length === 1) return runSingle(state.images[0], ids);
-  return runMany(state.images, ids);
-}
-
-async function runSingle(file, ids) {
-  $("#batch-results").hidden = true;
-  $("#ocr-progress").hidden = true;
-  const cols = $("#ocr-columns");
-  cols.hidden = false;
-  cols.innerHTML = "";
-  ids.forEach((id) => cols.appendChild(ocrColShell(id)));
-  $("#run-ocr").disabled = true;
-
-  try {
-    const fd = new FormData();
-    fd.append("image", file);
-    fd.append("providers", ids.join(","));
-    const res = await fetch("/api/ocr", { method: "POST", body: fd });
-    if (!res.ok) {
-      let msg = res.statusText;
-      try { msg = (await res.json()).error || msg; } catch (e) {}
-      throw new Error(msg);
-    }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const parts = buf.split("\n\n");
-      buf = parts.pop();
-      for (const part of parts) {
-        const line = part.trim();
-        if (!line.startsWith("data:")) continue;
-        const payload = JSON.parse(line.slice(5).trim());
-        if (payload.done) continue;
-        fillOcrCol(payload);
-      }
-    }
-    revealTranslit();
-  } catch (e) {
-    alert("OCR failed: " + e.message);
-  } finally {
-    $("#run-ocr").disabled = false;
-  }
-}
-
-async function runMany(files, ocrIds) {
-  const cols = $("#ocr-columns");
-  cols.hidden = true;
-  cols.innerHTML = "";
-  const tbody = $("#batch-results tbody");
-  tbody.innerHTML = "";
-  state.batchRows = [];
-  $("#batch-results").hidden = false;
-  $("#batch-csv").hidden = true;
-  $("#run-ocr").disabled = true;
-  const prog = $("#ocr-progress");
-  prog.hidden = false;
-  prog.textContent = `Processing 0 / ${files.length}…`;
-
-  try {
-    const fd = new FormData();
-    files.forEach((f) => fd.append("images", f, f.name));
-    fd.append("ocr_providers", ocrIds.join(","));
-    fd.append("translit_providers", "");   // step 1 is OCR only — step 2 does transliteration
-    const res = await fetch("/api/batch", { method: "POST", body: fd });
-    if (!res.ok) {
-      let msg = res.statusText;
-      try { msg = (await res.json()).error || msg; } catch (e) {}
-      throw new Error(msg);
-    }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const parts = buf.split("\n\n");
-      buf = parts.pop();
-      for (const part of parts) {
-        const line = part.trim();
-        if (!line.startsWith("data:")) continue;
-        const payload = JSON.parse(line.slice(5).trim());
-        if (payload.done) continue;
-        if (payload.progress) {
-          prog.textContent = `Processing ${payload.progress} / ${payload.total}…`;
-          continue;
-        }
-        addBatchRow(payload);
-      }
-    }
-    prog.textContent = `Done — ${state.batchRows.length} row${state.batchRows.length === 1 ? "" : "s"}.`;
-    $("#batch-csv").hidden = state.batchRows.length === 0;
-  } catch (e) {
-    prog.textContent = "Run failed: " + e.message;
-  } finally {
-    $("#run-ocr").disabled = false;
-  }
 }
 
 function labelFor(cap, id) {
@@ -372,72 +155,112 @@ function labelFor(cap, id) {
   return row ? row.label : id;
 }
 
-function ocrColShell(id) {
+/* ---------- step 1: read one image ---------- */
+function wireDropzone() {
+  const dz = $("#dropzone");
+  const input = $("#file-input");
+  const preview = $("#preview");
+  const label = $("#drop-label");
+
+  const show = (file) => {
+    state.file = file;
+    $("#run-ocr").disabled = !file;
+    if (!file) { preview.hidden = true; preview.src = ""; return; }
+    const rd = new FileReader();
+    rd.onload = () => { preview.src = rd.result; preview.hidden = false; };
+    rd.readAsDataURL(file);
+    label.innerHTML = "<strong>" + esc(file.name) + "</strong> — click to replace";
+  };
+
+  input.addEventListener("change", () => { if (input.files[0]) show(input.files[0]); input.value = ""; });
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault(); dz.classList.remove("drag");
+    const f = [...e.dataTransfer.files].find((x) => x.type.startsWith("image/"));
+    if (f) show(f);
+  });
+}
+
+async function runOcr() {
+  if (!state.file) return;
+  if (!state.engines.ocr.length) await state.ready;
+  const ids = state.engines.ocr.length ? state.engines.ocr : checkedIds("ocr");
+  if (!ids.length) return fail("#ocr-err", "Tick at least one OCR engine.");
+
+  hide("#ocr-err");
+  const btn = $("#run-ocr");
+  btn.disabled = true; btn.textContent = "Reading…";
+
+  const out = $("#ocr-out");
+  out.hidden = false;
+  out.innerHTML = "";
+  ids.forEach((id) => out.appendChild(ocrCardShell(id)));
+
+  try {
+    const fd = new FormData();
+    fd.append("image", state.file);
+    fd.append("providers", ids.join(","));
+    const res = await fetch("/api/ocr", { method: "POST", body: fd });
+    if (!res.ok) throw new Error(await errText(res));
+    await readSSE(res, (payload) => { if (!payload.done) fillOcrCard(payload); });
+  } catch (e) {
+    fail("#ocr-err", "Couldn't read the image: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "Read image";
+  }
+}
+
+function ocrCardShell(id) {
   const el = document.createElement("div");
-  el.className = "col";
+  el.className = "ocr-card";
   el.dataset.pid = id;
-  el.innerHTML = `<h3><span>${esc(labelFor("ocr", id))}</span><span class="ms">…</span></h3>
-    <div class="running">running…</div>`;
+  el.innerHTML =
+    `<div class="card-h"><span class="lbl">${esc(labelFor("ocr", id))}</span><span class="ms">reading…</span></div>` +
+    `<div class="running hint">running…</div>`;
   return el;
 }
 
-function fillOcrCol(row) {
-  const el = $(`#ocr-columns .col[data-pid="${cssEsc(row.provider_id)}"]`);
+function fillOcrCard(row) {
+  const el = $(`#ocr-out .ocr-card[data-pid="${cssEsc(row.provider_id)}"]`);
   if (!el) return;
+  const head = `<div class="card-h"><span class="lbl">${esc(labelFor("ocr", row.provider_id))}</span>` +
+    `<span class="ms">${row.ms != null ? row.ms + " ms" : ""}</span></div>`;
   if (!row.ok) {
-    el.classList.add("is-error");
-    el.innerHTML = `<h3><span>${esc(labelFor("ocr", row.provider_id))}</span></h3>` +
-      `<div class="err">${esc(row.error || "failed")}</div>`;
+    el.innerHTML = head + `<p class="err">${esc(row.error || "the engine failed")}</p>`;
     return;
   }
-  el.innerHTML = "";
-
+  el.innerHTML = head;
   const ta = document.createElement("textarea");
   ta.dir = "rtl";
   ta.value = row.text || "";
-  const field = elWith("div", "field field--urdu");
-  const head = elWith("div", "field-head");
-  head.appendChild(elWith("span", "lab", "Urdu text"));
-  head.appendChild(copyBtn(row.text || ""));
-  field.appendChild(head);
-  field.appendChild(ta);
-  el.appendChild(field);
-
-  if (row.notes) el.appendChild(elWith("div", "foot", "note: " + row.notes));
-  if (row.roman || row.roman_diacritic)
-    el.appendChild(romanResultField(row.roman, row.roman_diacritic));
-  if (row.devanagari) el.appendChild(resultField("Devanagari", row.devanagari, false));
+  el.appendChild(ta);
+  if (!(row.text || "").trim())
+    el.insertAdjacentHTML("beforeend", '<p class="err">read no text from this image</p>');
 
   const use = document.createElement("button");
-  use.className = "use-btn";
-  use.textContent = "Use this text ↓";
+  use.className = "btn-primary use-btn";
+  use.type = "button";
+  use.innerHTML = "Use this text&nbsp;↓";
   use.addEventListener("click", () => {
     $("#urdu-input").value = ta.value;
-    checkedIds("translit").length || pick("translit:recommended");
+    $("#step-translit").scrollIntoView({ behavior: "smooth", block: "start" });
     runTranslit();
-    revealTranslit(true);
   });
   el.appendChild(use);
-  el.appendChild(engineFoot("ocr", row.provider_id, row.ms));
 }
 
-/* ---------- transliteration ---------- */
-function revealTranslit(scroll) {
-  $("#translit-card").hidden = false;
-  if (scroll) $("#translit-card").scrollIntoView({ behavior: "smooth" });
-}
-
+/* ---------- step 2: transliterate ---------- */
 async function runTranslit() {
-  const text = $("#urdu-input").value.trim();
-  const ids = checkedIds("translit");
-  if (!text) return alert("Nothing to transliterate.");
-  if (!ids.length) return alert("Tick at least one transliteration engine.");
+  const text = $("#urdu-input").value.replace(/\s+$/g, "");
+  if (!text.trim()) return fail("#tr-err", "Nothing to transliterate yet.");
+  if (!state.engines.translit.length) await state.ready;
+  const ids = state.engines.translit.length ? state.engines.translit : checkedIds("translit");
+  if (!ids.length) return fail("#tr-err", "Tick at least one transliteration engine.");
 
-  const cols = $("#translit-columns");
-  cols.innerHTML = ids.map((id) =>
-    `<div class="col" data-pid="${esc(id)}"><h3><span>${esc(labelFor("translit", id))}</span>` +
-    `<span class="ms">…</span></h3><div class="running">running…</div></div>`).join("");
-  $("#run-translit").disabled = true;
+  hide("#tr-err");
+  const btn = $("#run-translit");
+  btn.disabled = true; btn.textContent = "Working…";
 
   try {
     const res = await fetch("/api/transliterate", {
@@ -447,118 +270,329 @@ async function runTranslit() {
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    for (const row of data.results || []) fillTranslitCol(row);
+    const rows = (data.results || []).filter((r) => r && r.ok);
+    if (!rows.length) {
+      const first = (data.results || [])[0];
+      throw new Error((first && first.error) || "the engine failed");
+    }
+
+    const urLines = splitLines(text);
+    state.results = {};
+    rows.forEach((row) => {
+      state.results[row.provider_id] = {
+        ur: urLines,
+        hi: splitLines(row.devanagari),
+        ro: splitLines(row.roman),
+        rod: splitLines(row.roman_diacritic || row.roman),
+        ms: row.ms,
+      };
+    });
+    state.wordCache = {};
+    renderReaderEngines(rows.map((r) => r.provider_id));
+    showEngine(rows[0].provider_id);
+    $("#reader").hidden = false;
+    applyScript(); applyZoom(); applyDiacritics();
+    $("#reader").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) {
-    alert("Transliteration failed: " + e.message);
+    fail("#tr-err", "Transliteration failed: " + e.message);
   } finally {
-    $("#run-translit").disabled = false;
+    btn.disabled = false; btn.textContent = "Transliterate";
   }
 }
 
-function fillTranslitCol(row) {
-  const el = $(`#translit-columns .col[data-pid="${cssEsc(row.provider_id)}"]`);
-  if (!el) return;
-  if (!row.ok) {
-    el.classList.add("is-error");
-    el.innerHTML = `<h3><span>${esc(labelFor("translit", row.provider_id))}</span></h3>` +
-      `<div class="err">${esc(row.error || "failed")}</div>`;
-    return;
+/* The engine tab strip above the reader — one button per engine that returned a
+   result. Hidden when only one engine ran. */
+function renderReaderEngines(ids) {
+  const bar = $("#reader-engines");
+  if (!bar) return;
+  bar.hidden = ids.length < 2;
+  bar.innerHTML = ids.map((id) =>
+    `<button type="button" data-eng="${esc(id)}">${esc(labelFor("translit", id))}</button>`).join("");
+}
+function wireReaderEngines() {
+  const bar = $("#reader-engines");
+  if (!bar) return;
+  bar.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-eng]");
+    if (b) showEngine(b.dataset.eng);
+  });
+}
+
+/* Point the reader at one engine's result and repaint. Every other reader
+   control (script, size, diacritics, word popover, card) works off state.result
+   and needs no changes. */
+function showEngine(id) {
+  if (!state.results[id]) return;
+  state.activeEngine = id;
+  state.result = state.results[id];
+  state.wordCache = {};
+  closeWordPop();
+  $$("#reader-engines button").forEach((b) => {
+    const on = b.dataset.eng === id;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  const r = state.results[id];
+  $("#reader-foot").textContent =
+    "via " + labelFor("translit", id) + (r.ms != null ? "  ·  " + r.ms + " ms" : "");
+  renderGhazal();
+}
+
+/* ---------- reader controls ---------- */
+function wireReaderControls() {
+  $$("#script-switch button").forEach((b) =>
+    b.addEventListener("click", () => { state.script = b.dataset.s; persist(); applyScript(); repaintReader(); }));
+  $$("#size-switch button").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.scale = clampZoom(state.scale + (b.dataset.z === "+" ? ZOOM.step : -ZOOM.step));
+      persist(); applyZoom();
+    }));
+  $$("#dia-switch button").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.diacritics = b.dataset.d === "on";
+      // Always live — never disabled, never forces a script change. Sets the
+      // Roman spelling; visible now if the reader shows Roman, otherwise the
+      // moment the reader is switched to Roman.
+      persist(); applyDiacritics(); repaintReader();
+    }));
+}
+
+const clampZoom = (v) => Math.min(ZOOM.max, Math.max(ZOOM.min, Math.round(v * 100) / 100));
+function persist() {
+  try {
+    localStorage.setItem("urdu.script", state.script);
+    localStorage.setItem("urdu.readerScale", String(state.scale));
+    localStorage.setItem("urdu.diacritics", state.diacritics ? "on" : "off");
+  } catch (e) {}
+}
+
+function applyScript() {
+  $("#ghazal").dataset.script = state.script;
+  $$("#script-switch button").forEach((b) => {
+    const on = b.dataset.s === state.script;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+function applyZoom() { $("#ghazal").style.setProperty("--rs", state.scale); }
+function applyDiacritics() {
+  $$("#dia-switch button").forEach((b) => {
+    const on = (b.dataset.d === "on") === state.diacritics;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+/* The reader repaints from stored lines only — the Plain/Diacritics switch and
+   the script switch never re-hit the server. */
+function repaintReader() { if (state.result) renderGhazal(); }
+
+/* ---------- ghazal rendering ---------- */
+const curKey = () => (state.script === "ro" ? (state.diacritics ? "rod" : "ro") : state.script);
+function linesFor() {
+  const k = curKey();
+  const n = maxLines();
+  const src = (state.result && state.result[k]) || [];
+  return Array.from({ length: n }, (_, i) => src[i] || "");
+}
+function maxLines() {
+  if (!state.result) return 0;
+  return Math.max(...["ur", "hi", "ro", "rod"].map((k) => (state.result[k] || []).length), 0);
+}
+
+function renderGhazal() {
+  const g = $("#ghazal");
+  const lines = linesFor();
+  const rtl = state.script === "ur";
+  g.innerHTML = "";
+  closeWordPop();
+
+  for (let i = 0; i < lines.length; i += 2) {
+    const sher = document.createElement("div");
+    sher.className = "sher";
+    const body = document.createElement("div");
+    body.className = "sher-body";
+    for (let j = i; j < Math.min(i + 2, lines.length); j++) {
+      body.appendChild(misraEl(lines[j], j, rtl));
+    }
+    sher.appendChild(body);
+    sher.appendChild(sherTools(i));
+    g.appendChild(sher);
   }
-  el.innerHTML = "";
-  el.appendChild(romanResultField(row.roman, row.roman_diacritic));
-  el.appendChild(resultField("Devanagari", row.devanagari || "—", false));
-  el.appendChild(engineFoot("translit", row.provider_id, row.ms));
+  if (!lines.length) g.innerHTML = '<p class="hint">Nothing to show.</p>';
 }
 
-/* A labelled result block: label + copy button on one row, the text below.
-   `roman` picks the serif Roman styling over the Devanagari font. */
-function resultField(label, text, roman) {
-  const wrap = elWith("div", "field " + (roman ? "field--roman" : "field--deva"));
-  const head = elWith("div", "field-head");
-  head.appendChild(elWith("span", "lab", label));
-  head.appendChild(copyBtn(text === "—" ? "" : text));
-  const out = document.createElement("div");
-  out.className = "out" + (roman ? " roman" : "");
-  out.textContent = text;
-  wrap.appendChild(head);
-  wrap.appendChild(out);
-  return wrap;
+function misraEl(text, lineIdx, rtl) {
+  const p = document.createElement("p");
+  p.className = "misra";
+  if (rtl) p.dir = "rtl";
+  const parts = String(text).split(/(\s+)/);
+  parts.forEach((chunk, k) => {
+    if (!chunk) return;
+    if (k % 2 === 1 || /^\s+$/.test(chunk)) { p.appendChild(document.createTextNode(chunk)); return; }
+    const w = document.createElement("span");
+    w.className = "w";
+    w.textContent = chunk;
+    w.dataset.line = lineIdx;
+    w.dataset.wi = (k / 2) | 0;
+    w.addEventListener("click", (e) => { e.stopPropagation(); openWordPop(w); });
+    p.appendChild(w);
+  });
+  return p;
 }
 
-/* Roman block carrying BOTH spellings (plain + diacritic) on the .out element.
-   The Plain/Diacritics toggle repaints these via refreshRomanFields() — no
-   re-fetch. */
-function romanResultField(plain, dia) {
-  const wrap = elWith("div", "field field--roman");
-  const head = elWith("div", "field-head");
-  head.appendChild(elWith("span", "lab", "Roman"));
-  head.appendChild(copyBtn(""));
-  const out = document.createElement("div");
-  out.className = "out roman";
-  out.dataset.plain = plain || "";
-  out.dataset.dia = dia || "";
-  wrap.appendChild(head);
-  wrap.appendChild(out);
-  paintRoman(out);
-  return wrap;
+function sherTools(startLine) {
+  const box = document.createElement("div");
+  box.className = "sher-tools";
+  const copy = mkBtn("Copy", () => {
+    const txt = linesFor().slice(startLine, startLine + 2).filter(Boolean).join("\n");
+    copyText(txt, copy);
+  });
+  const card = mkBtn("Card", () => downloadCard(startLine));
+  box.append(copy, card);
+  return box;
+}
+function mkBtn(label, fn) {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = label;
+  b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+  return b;
 }
 
-function paintRoman(out) {
-  const txt = (state.diacritics ? out.dataset.dia : out.dataset.plain)
-    || out.dataset.plain || out.dataset.dia || "—";
-  out.textContent = txt;
-  const copy = out.parentElement && out.parentElement.querySelector(".copy-btn");
-  if (copy) setCopyPayload(copy, txt === "—" ? "" : txt);
+/* ---------- word popover ---------- */
+function wireWordPop() {
+  $("#wp-close").addEventListener("click", closeWordPop);
+  document.addEventListener("click", (e) => {
+    if (!$("#word-pop").hidden && !$("#word-pop").contains(e.target)) closeWordPop();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeWordPop(); });
+  window.addEventListener("resize", closeWordPop);
+  window.addEventListener("scroll", () => { if (!$("#word-pop").hidden) closeWordPop(); }, { passive: true });
 }
 
-/* Repaint every Roman block on the page for the current toggle state. */
-function refreshRomanFields() { $$(".out.roman").forEach(paintRoman); }
-
-function engineFoot(cap, id, ms) {
-  const d = elWith("div", "foot");
-  d.textContent = "via " + labelFor(cap, id) + (ms != null ? "  ·  " + ms + " ms" : "");
-  return d;
+function closeWordPop() {
+  $("#word-pop").hidden = true;
+  $$(".w.is-open").forEach((w) => w.classList.remove("is-open"));
 }
 
-/* ---------- multi-image results table + CSV ---------- */
-const BATCH_COLS = ["file", "ocr_engine", "urdu", "ms", "error"];
+async function openWordPop(wordEl) {
+  closeWordPop();
+  wordEl.classList.add("is-open");
+  const pop = $("#word-pop");
+  const lineIdx = +wordEl.dataset.line, wi = +wordEl.dataset.wi;
 
-function addBatchRow(row) {
-  state.batchRows.push(row);
-  const tr = document.createElement("tr");
-  tr.innerHTML = BATCH_COLS.map((c) => {
-    const v = row[c] == null ? "" : String(row[c]);
-    const rtl = c === "urdu" ? ' dir="rtl"' : "";
-    const cls = c === "error" && v ? ' class="err"' : "";
-    return `<td${rtl}${cls}>${esc(v)}</td>`;
-  }).join("");
-  $("#batch-results tbody").appendChild(tr);
+  let forms = alignedForms(lineIdx, wi);
+  const fill = (f) => ["ur", "hi", "ro", "rod"].forEach((k) =>
+    ($(`#word-pop [data-k="${k}"]`).textContent = (f && f[k]) || "—"));
+
+  if (forms) {
+    pop.classList.remove("is-loading");
+    fill(forms);
+  } else if (state.script === "ur") {
+    fill({ ur: wordEl.textContent });
+    pop.classList.add("is-loading");
+    forms = await lookupWord(wordEl.textContent.trim());
+    pop.classList.remove("is-loading");
+    if (forms) fill(forms);
+  } else {
+    // couldn't line the scripts up and we don't have the Urdu token
+    pop.classList.remove("is-loading");
+    fill({ [curKey()]: wordEl.textContent });
+  }
+
+  placePop(pop, wordEl);
 }
 
-function downloadBatchCsv() {
-  const cell = (v) => {
-    const s = v == null ? "" : String(v);
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  };
-  const lines = [BATCH_COLS.join(",")];
-  for (const r of state.batchRows) lines.push(BATCH_COLS.map((c) => cell(r[c])).join(","));
-  // BOM so Excel reads the Urdu column as UTF-8
-  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+/* Line the four scripts up token-for-token. Works whenever every script split
+   the misra into the same number of words — which the rule engine almost
+   always does. */
+function alignedForms(lineIdx, wi) {
+  if (!state.result) return null;
+  const toks = {};
+  for (const k of ["ur", "hi", "ro", "rod"]) {
+    toks[k] = String((state.result[k] || [])[lineIdx] || "").split(/\s+/).filter(Boolean);
+  }
+  const n = toks[curKey()].length;
+  if (!n || !["ur", "hi", "ro", "rod"].every((k) => toks[k].length === n)) return null;
+  return { ur: toks.ur[wi], hi: toks.hi[wi], ro: toks.ro[wi], rod: toks.rod[wi] };
+}
+
+async function lookupWord(tok) {
+  if (!tok) return null;
+  if (state.wordCache[tok]) return state.wordCache[tok];
+  try {
+    const res = await fetch("/api/transliterate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: tok, providers: [state.activeEngine] }),
+    });
+    const row = ((await res.json()).results || [])[0];
+    if (!row || !row.ok) return null;
+    const f = { ur: tok, hi: row.devanagari || "—",
+                ro: row.roman || "—", rod: row.roman_diacritic || row.roman || "—" };
+    state.wordCache[tok] = f;
+    return f;
+  } catch (e) { return null; }
+}
+
+function placePop(pop, anchor) {
+  pop.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let left = r.left + window.scrollX + r.width / 2 - pw / 2;
+  left = Math.max(10 + window.scrollX, Math.min(left, window.scrollX + document.documentElement.clientWidth - pw - 10));
+  // prefer above the word — the next misra usually sits right below it
+  const roomAbove = r.top - 70 > ph;
+  const top = roomAbove ? r.top + window.scrollY - ph - 8 : r.bottom + window.scrollY + 8;
+  pop.style.left = left + "px";
+  pop.style.top = top + "px";
+}
+
+/* ---------- couplet -> PNG card (native canvas, no libraries) ---------- */
+function downloadCard(startLine) {
+  const lines = linesFor().slice(startLine, startLine + 2).filter(Boolean);
+  if (!lines.length) return;
+  const W = 1200, H = 630;
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const c = cv.getContext("2d");
+  c.fillStyle = "#fdfaf3"; c.fillRect(0, 0, W, H);
+  c.fillStyle = "#eb0046"; c.fillRect(W / 2 - 34, 96, 68, 3);
+
+  const ur = state.script === "ur";
+  const fam = ur ? '"Noto Nastaliq Urdu","Jameel Noori Nastaleeq",serif'
+    : state.script === "hi" ? '"Nirmala UI","Noto Serif Devanagari",serif'
+      : 'Georgia,"Times New Roman",serif';
+  const size = ur ? 50 : 44;
+  c.fillStyle = "#171717";
+  c.textAlign = "center"; c.textBaseline = "middle";
+  c.direction = ur ? "rtl" : "ltr";
+  c.font = size + 'px ' + fam;
+  const gap = size * 1.9;
+  const startY = H / 2 - (lines.length - 1) * gap / 2;
+  lines.forEach((ln, i) => c.fillText(ln, W / 2, startY + i * gap, W - 180));
+
+  c.font = '20px Georgia, serif'; c.fillStyle = "#8a8a8a"; c.direction = "ltr";
+  c.fillText("اردو  ·  Urdu Toolkit", W / 2, H - 52);
+
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "urdu-ocr.csv";
+  a.href = cv.toDataURL("image/png");
+  a.download = "sher.png";
   a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 /* ---------- settings ---------- */
+/* The Settings panel is hidden from the site. Keys are read from the host's
+   environment; /api/settings and the settings_readonly flag still back it. */
 function wireSettings() {
+  const btn = $("#settings-btn");
+  if (!btn) return;
   const modal = $("#settings-modal");
-  $("#settings-btn").addEventListener("click", async () => {
+  btn.addEventListener("click", async () => {
     const status = await (await fetch("/api/settings")).json();
     const ro = state.config.settings_readonly;
     $("#settings-fields").innerHTML = Object.keys(status).map((k) =>
-      `<label>${esc(k)} <span class="dim">${status[k] ? "(set)" : "(not set)"}</span></label>
+      `<label>${esc(k)} <span class="hint">${status[k] ? "(set)" : "(not set)"}</span></label>
        <input type="${k.endsWith("KEY") ? "password" : "text"}" data-key="${esc(k)}"
               ${ro ? "disabled" : ""}
               placeholder="${ro ? "" : (status[k] ? "leave blank to keep" : "")}">`).join("");
@@ -574,9 +608,7 @@ function wireSettings() {
   $("#save-settings").addEventListener("click", async () => {
     if (state.config.settings_readonly) return;
     const body = {};
-    $$("#settings-fields input").forEach((i) => {
-      if (i.value.trim()) body[i.dataset.key] = i.value.trim();
-    });
+    $$("#settings-fields input").forEach((i) => { if (i.value.trim()) body[i.dataset.key] = i.value.trim(); });
     if (!Object.keys(body).length) { modal.hidden = true; return; }
     const res = await fetch("/api/settings", {
       method: "POST",
@@ -591,36 +623,56 @@ function wireSettings() {
   });
 }
 
+function renderSettingsEngines() {
+  const box = $("#settings-engines");
+  if (!box) return;
+  box.innerHTML = [["ocr", "OCR"], ["translit", "Transliterate"]].map(([cap, title]) => {
+    const rows = state.providers[cap] || [];
+    if (!rows.length) return "";
+    return `<div class="eng-price-group"><strong>${esc(title)}</strong>` +
+      rows.map((r) => `<div class="eng-price-row"><span>${esc(r.label)}` +
+        `${r.available ? "" : ' <span class="hint">— ' + esc(r.reason || "needs a key") + "</span>"}</span>` +
+        `<span class="price-tag">${esc(r.price || "—")}</span></div>`).join("") +
+      `</div>`;
+  }).join("");
+}
+
 /* ---------- tiny helpers ---------- */
+function splitLines(s) {
+  return String(s == null ? "" : s).replace(/\r/g, "").split("\n").map((l) => l.trim()).filter(Boolean);
+}
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function cssEsc(s) { return String(s).replace(/["\\]/g, "\\$&"); }
-function elWith(tag, cls, text) {
-  const e = document.createElement(tag);
-  e.className = cls;
-  e.textContent = text;
-  return e;
+function hide(sel) { const e = $(sel); if (e) e.hidden = true; }
+function fail(sel, msg) { const e = $(sel); if (e) { e.textContent = msg; e.hidden = false; } }
+async function errText(res) {
+  try { return (await res.json()).error || res.statusText; } catch (e) { return res.statusText; }
 }
-/* Copy button. The payload lives on the element (b._payload) and is read at
-   click time, so a Roman block can update it when the diacritics toggle flips
-   without rebuilding the button. */
-function copyBtn(text) {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.className = "copy-btn";
-  b.textContent = "Copy";
-  setCopyPayload(b, text);
-  b.addEventListener("click", () => {
-    if (!b._payload) return;
-    navigator.clipboard.writeText(b._payload).then(() => {
-      b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200);
-    });
+async function readSSE(res, onPayload) {
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop();
+    for (const part of parts) {
+      const line = part.trim();
+      if (line.startsWith("data:")) onPayload(JSON.parse(line.slice(5).trim()));
+    }
+  }
+}
+function copyText(text, btn) {
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    if (!btn) return;
+    const old = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(() => (btn.textContent = old), 1200);
   });
-  return b;
-}
-function setCopyPayload(b, text) {
-  b._payload = text || "";
-  b.disabled = !b._payload;
 }

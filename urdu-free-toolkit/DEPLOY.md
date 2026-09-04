@@ -11,7 +11,7 @@ can't hold PyTorch/PaddleOCR.
 | Step | Live on Vercel | Local only |
 |---|---|---|
 | OCR | GPT vision, Claude vision, Gemini vision, Google Cloud Vision | EasyOCR, PaddleOCR, Surya, … (show as "not installed") |
-| Transliteration | GPT, Groq, Rule engine, Aksharamukha, uroman | ICU |
+| Transliteration | GPT, Groq, Rule engine, Aksharamukha | ICU |
 
 Structure Vercel sees: **`api/index.py`** re-exports the Flask `app`, and
 `vercel.json` rewrites every route to it. Dependencies come from

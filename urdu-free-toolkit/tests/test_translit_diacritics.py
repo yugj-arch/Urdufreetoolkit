@@ -117,27 +117,10 @@ def test_rule_provider_returns_both_roman_spellings():
     assert r.devanagari == "ख़राब"
 
 
-from providers.translit import _uroman_engine as _ur      # noqa: E402
 from providers.translit import _aksharamukha_engine as _ak  # noqa: E402
-from providers.translit.uroman_p import PROVIDER as UROMAN   # noqa: E402
 from providers.translit.aksharamukha_p import PROVIDER as AKSHARA  # noqa: E402
 
-_uroman_missing = pytest.mark.skipif(_ur._UR is None, reason="uroman not installed")
 _akshara_missing = pytest.mark.skipif(_ak._ak is None, reason="aksharamukha not installed")
-
-
-@_uroman_missing
-def test_uroman_engine_style_kwarg():
-    assert _ur.transliterate("ہیں", style="diacritic") == ("हैं", "haiñ")
-    assert _ur.transliterate("ہیں") == ("हैं", "hain")
-
-
-@_uroman_missing
-def test_uroman_provider_returns_both_roman_spellings():
-    r = UROMAN.translit("خراب", TranslitOpts())
-    assert r.ok
-    assert r.roman == "khrab"              # uroman's skeleton reading
-    assert r.roman_diacritic == "ḳharāb"   # rule engine's diacritic fallback
 
 
 @_akshara_missing

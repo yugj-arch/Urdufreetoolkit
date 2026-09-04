@@ -24,7 +24,7 @@ class ClaudeTranslit(BaseProvider):
         kind="api",
         needs=["ANTHROPIC_API_KEY"],
         note="Context-aware vowel restoration.",
-        price="≈ $0.01 / run",
+        price="≈ $0.01 / image",
     )
 
     def available(self) -> tuple[bool, str]:

@@ -16,7 +16,7 @@ engines are serialized against each other via ``_OFFLINE_LOCK`` while API
 engines (pure network I/O) still run fully in parallel — and one offline OCR
 engine still overlaps the API ones.
 
-The offline *transliteration* engines (rule, uroman, ICU, Aksharamukha) are
+The offline *transliteration* engines (rule, ICU, Aksharamukha) are
 plain string transforms with no ML runtime — they are **not** serialized, so a
 one-millisecond ``rule`` transliteration never has to wait out a 50-second
 PaddleOCR model load queued ahead of it on the lock.

@@ -24,7 +24,7 @@ class GptTranslit(BaseProvider):
         kind="api",
         needs=["OPENAI_API_KEY"],
         note="Context-aware vowel restoration -- the tie-breaker.",
-        price="≈ $0.005 / run",
+        price="≈ $0.005 / image",
     )
 
     def available(self) -> tuple[bool, str]:
