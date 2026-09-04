@@ -349,7 +349,7 @@ function wireReaderControls() {
     }));
   $$("#dia-switch button").forEach((b) =>
     b.addEventListener("click", () => {
-      state.diacritics = b.dataset.d === "on";
+      state.diacritics = !state.diacritics;
       // Always live — never disabled, never forces a script change. Sets the
       // Roman spelling; visible now if the reader shows Roman, otherwise the
       // moment the reader is switched to Roman.
@@ -377,7 +377,7 @@ function applyScript() {
 function applyZoom() { $("#ghazal").style.setProperty("--rs", state.scale); }
 function applyDiacritics() {
   $$("#dia-switch button").forEach((b) => {
-    const on = (b.dataset.d === "on") === state.diacritics;
+    const on = state.diacritics;
     b.classList.toggle("on", on);
     b.setAttribute("aria-pressed", on ? "true" : "false");
   });

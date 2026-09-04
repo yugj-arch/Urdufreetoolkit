@@ -218,6 +218,8 @@ textarea:focus, input[type="password"]:focus, input[type="text"]:focus {
   border-bottom: 1px solid var(--line);
   border-radius: 7px 7px 0 0;
 }
+/* keep script + spelling switches together; push only text-size (A− / A+) to the right */
+#size-switch { order: 1; margin-left: auto; }
 
 /* segmented control — Rekhta's script switch */
 .seg {
@@ -234,6 +236,10 @@ textarea:focus, input[type="password"]:focus, input[type="text"]:focus {
 .seg button.on { background: var(--accent); color: var(--accent-ink); }
 .seg button:disabled { color: #cfcfcf; cursor: not-allowed; }
 .seg[lang], .seg button[lang="ur"] { font-family: var(--nastaliq); }
+
+/* diacritics toggle — a single "ā" glyph */
+#dia-switch button { padding: 8px 13px; }
+#dia-switch button i { font-style: italic; font-weight: 700; font-size: 15px; line-height: 1; }
 
 /* ghazal body — couplet sets */
 #ghazal { --rs: 1; text-align: center; padding: clamp(20px, 5vw, 40px) 0 24px; }
