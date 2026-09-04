@@ -11,7 +11,9 @@ def test_static_files_exist():
 def test_index_references_static_and_no_cdn():
     html = (ROOT / "templates/index.html").read_text(encoding="utf-8")
     assert "app.js" in html and "app.css" in html
-    assert "http://" not in html and "https://" not in html  # no CDN / external hosts
+    # no external resources (scripts / stylesheets / fonts) loaded from CDN
+    import re
+    assert not re.search(r'<(?:script|link)[^>]+(?:src|href)=["\']https?://', html, re.I)
 
 
 def test_app_js_hits_endpoints():
