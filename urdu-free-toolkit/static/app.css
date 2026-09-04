@@ -218,8 +218,10 @@ textarea:focus, input[type="password"]:focus, input[type="text"]:focus {
   border-bottom: 1px solid var(--line);
   border-radius: 7px 7px 0 0;
 }
-/* keep script + spelling switches together; push only text-size (A− / A+) to the right */
-#size-switch { order: 1; margin-left: auto; }
+/* centre the script + spelling switches as a pair; take text-size (A− / A+) out of
+   flow so it sits at the right edge without shoving the centred pair off-centre.
+   .reader-bar is position: sticky, so it already anchors this absolute child. */
+#size-switch { order: 1; position: absolute; right: 12px; top: 50%; transform: translateY(-50%); }
 
 /* segmented control — Rekhta's script switch */
 .seg {
@@ -326,4 +328,6 @@ code { background: var(--line-2); padding: 1px 5px; border-radius: 4px; font-siz
 @media (max-width: 560px) {
   .brand .name { display: none; }
   .reader-bar { top: 53px; }
+  /* narrow screens: let A− / A+ flow back in and wrap under the centred pair */
+  #size-switch { position: static; transform: none; }
 }
