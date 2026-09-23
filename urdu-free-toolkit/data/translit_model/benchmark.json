@@ -1,0 +1,19 @@
+{
+ "neural": {
+  "label": "neural (offline)",
+  "words": {
+   "deva_acc": 1.0,
+   "roman_acc": 1.0,
+   "n": 1,
+   "coverage": 1.0,
+   "errors": []
+  },
+  "sents": {
+   "word_acc": 0.7308499475341028,
+   "cer": 0.08793686583990981,
+   "n": 150,
+   "coverage": 1.0
+  },
+  "seconds": 48.0
+ }
+}

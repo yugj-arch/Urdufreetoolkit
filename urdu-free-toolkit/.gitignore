@@ -10,13 +10,22 @@ models/
 *.onnx
 
 # OCR fine-tuning: generated datasets, model checkpoints, downloaded fonts
-/data/
+/data/*
 # ...except the bundled offline transliteration lexicons (scripts/build_lexicon.py
 # + scripts/llm_distill_lexicon.py output + source docs) -- these ARE meant to
 # ship in the repo.
 !/data/urdu_lexicon.json.gz
 !/data/urdu_lexicon_llm.json.gz
 !/data/SOURCES.md
+# ...and the trained neural transliterator (training/translit/, ~15 MB fp16
+# weights + gold lexicon) -- neural_translit.py loads these at runtime.
+!/data/translit_model/
+/data/translit_model/*
+!/data/translit_model/model.pt
+!/data/translit_model/lexicon.json.gz
+!/data/translit_model/evidence.json.gz
+!/data/translit_model/english.json
+!/data/translit_model/benchmark.json
 # resumability checkpoint/title-cache files: local working state, not shipped data.
 /data/.lexicon_checkpoint.json
 /data/.lexicon_titles.json

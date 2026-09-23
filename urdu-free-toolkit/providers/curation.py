@@ -18,5 +18,5 @@ from __future__ import annotations
 # At most four per step.
 FEATURED: dict[str, list[str]] = {
     "ocr":       ["gcv", "gpt"],
-    "translit":  ["rule", "gpt", "aksharamukha"],
+    "translit":  ["neural", "gpt", "rule", "aksharamukha"],
 }
