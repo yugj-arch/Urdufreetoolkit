@@ -1,4 +1,8 @@
 {
   "_comment": "Drop Urdu fonts (OFL/permissive) into ./fonts and list them here with their licence. Font files are not committed - see training/README.md.",
-  "fonts": []
+  "fonts": [
+    {"file": "NotoNastaliqUrdu-Regular.ttf", "style": "nastaliq", "licence": "SIL OFL 1.1", "source": "github.com/googlefonts/noto-fonts"},
+    {"file": "NotoNaskhArabic-Regular.ttf", "style": "naskh", "licence": "SIL OFL 1.1", "source": "github.com/googlefonts/noto-fonts"},
+    {"file": "NotoSansArabic-Regular.ttf", "style": "sans", "licence": "SIL OFL 1.1", "source": "github.com/googlefonts/noto-fonts"}
+  ]
 }

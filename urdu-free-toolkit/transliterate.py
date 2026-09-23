@@ -613,13 +613,19 @@ COMMON_WORDS: dict[str, tuple[str, str]] = {
 # ---------------------------------------------------------------------------
 # 3. Bundled lexicon (optional breadth layer, sits between dict and heuristic)
 # ---------------------------------------------------------------------------
-# A large Urdu -> (devanagari, roman) map built offline from open Wiktionary
-# data (see scripts/build_lexicon.py, data/SOURCES.md). Every entry has its
-# short vowels already resolved by a human, so it is exact for that word.
-# The file is optional: if it is absent the engine runs on the dictionary +
-# heuristic tiers alone, exactly as before.
+# Two optional Urdu -> (devanagari, roman) maps, merged at load time (see
+# data/SOURCES.md for full provenance of both):
+#   - urdu_lexicon.json.gz -- built offline from open Wiktionary headword
+#     data (scripts/build_lexicon.py). Human-authored, so treated as exact
+#     and wins on any overlap with the LLM-distilled file below.
+#   - urdu_lexicon_llm.json.gz -- GPT-distilled over real running-text
+#     frequency words from Urdu Wikipedia that the dictionary-lemma source
+#     doesn't cover (scripts/llm_distill_lexicon.py).
+# Both files are optional: if either or both are absent the engine runs on
+# the dictionary + heuristic tiers alone, exactly as before.
 
 _LEXICON_PATH = Path(__file__).with_name("data") / "urdu_lexicon.json.gz"
+_LEXICON_LLM_PATH = Path(__file__).with_name("data") / "urdu_lexicon_llm.json.gz"
 
 
 def _load_lexicon(path=_LEXICON_PATH) -> dict[str, tuple[str, str]]:
@@ -635,7 +641,8 @@ def _load_lexicon(path=_LEXICON_PATH) -> dict[str, tuple[str, str]]:
     return out
 
 
-_LEXICON = _load_lexicon()
+_LEXICON: dict[str, tuple[str, str]] = _load_lexicon(_LEXICON_LLM_PATH)
+_LEXICON.update(_load_lexicon(_LEXICON_PATH))
 
 
 def transliterate_word_with(oov_fn, word: str, style: str = "plain"):

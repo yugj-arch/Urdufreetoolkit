@@ -32,6 +32,7 @@ def write_lmdb(gt_txt, image_dir, out_lmdb) -> int:
     except Exception as e:  # pragma: no cover - documented, not run in CI
         raise RuntimeError("pip install lmdb  (needed for DTRB LMDB datasets)") from e
     rows = _read_gt(gt_txt)
+    Path(out_lmdb).mkdir(parents=True, exist_ok=True)
     env = lmdb.open(str(out_lmdb), map_size=1 << 40)
     with env.begin(write=True) as txn:
         cnt = 0

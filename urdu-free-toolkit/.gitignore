@@ -11,8 +11,21 @@ models/
 
 # OCR fine-tuning: generated datasets, model checkpoints, downloaded fonts
 /data/
+# ...except the bundled offline transliteration lexicons (scripts/build_lexicon.py
+# + scripts/llm_distill_lexicon.py output + source docs) -- these ARE meant to
+# ship in the repo.
+!/data/urdu_lexicon.json.gz
+!/data/urdu_lexicon_llm.json.gz
+!/data/SOURCES.md
+# resumability checkpoint/title-cache files: local working state, not shipped data.
+/data/.lexicon_checkpoint.json
+/data/.lexicon_titles.json
+/data/.lexicon_llm_checkpoint.json
 training/synth/fonts/*
 !training/synth/fonts/.gitkeep
+# Wikipedia-fetched training corpus: regenerable via
+# `python -m training.corpus.fetch_corpus --source wikipedia`, not shipped.
+/training/corpus/sentences_wiki.txt
 *.lmdb
 *.log
 *.out
