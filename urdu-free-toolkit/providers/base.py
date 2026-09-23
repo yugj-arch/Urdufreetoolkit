@@ -50,7 +50,8 @@ class OcrResult(Result):
 @dataclass
 class TranslitResult(Result):
     devanagari: str = ""
-    roman: str = ""
+    roman: str = ""              # plain ASCII ("khraab")
+    roman_diacritic: str = ""    # Rekhta-style marks ("ḳharāb"); "" if unavailable
 
 
 @dataclass

@@ -3,8 +3,9 @@
 # The repo's ../requirements.txt is the full LOCAL set (several GB of offline
 # recognizers + fine-tuning tooling) and is left untouched; .vercelignore hides
 # it from the build so Vercel uses this trimmed list instead: cloud engines plus
-# the two pure-Python offline transliterators. Offline recognizers show as
-# "not installed" on the deployed site and the app runs fine without them.
+# pure-Python offline transliteration (Aksharamukha; the rule engine is built in).
+# Offline recognizers show as "not installed" on the deployed site and the app
+# runs fine without them.
 
 Flask==3.0.3
 python-dotenv==1.0.1
@@ -14,4 +15,3 @@ anthropic>=0.40.0
 google-genai>=1.0.0
 groq>=0.11.0
 aksharamukha>=2.2
-uroman>=1.3

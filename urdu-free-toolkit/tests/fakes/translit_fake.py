@@ -12,7 +12,8 @@ class _Fake(BaseProvider):
                         kind="offline")
 
     def translit(self, text: str, opts: TranslitOpts) -> TranslitResult:
-        return TranslitResult(provider_id="tr_fake", devanagari="देव", roman="dev")
+        return TranslitResult(provider_id="tr_fake", devanagari="देव",
+                              roman="dev", roman_diacritic="dev-dia")
 
 
 PROVIDER = _Fake()

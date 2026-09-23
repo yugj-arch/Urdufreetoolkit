@@ -17,6 +17,6 @@ from __future__ import annotations
 # and the first entry is the engine the UI pre-selects on load (the one default).
 # At most four per step.
 FEATURED: dict[str, list[str]] = {
-    "ocr":       ["gcv", "gpt", "paddle", "easyocr"],
-    "translit":  ["rule", "gpt", "aksharamukha", "uroman"],
+    "ocr":       ["gcv", "gpt"],
+    "translit":  ["rule", "gpt", "aksharamukha"],
 }

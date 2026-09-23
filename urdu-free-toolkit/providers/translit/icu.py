@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """ICU transliteration as a provider (offline, Roman only).
 
-Uses ICU's built-in ``Arabic-Latin`` transform. Like uroman it maps letters
-without inventing short vowels. No Devanagari output.
+Uses ICU's built-in ``Arabic-Latin`` transform. It maps letters without
+inventing short vowels. No Devanagari output.
 """
 from __future__ import annotations
 

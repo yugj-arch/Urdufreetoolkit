@@ -71,6 +71,15 @@ _IAST_MAP = {
     "ś": "sh", "ṣ": "sh", "ḥ": "h", "ġ": "gh",
 }
 
+# IAST -> the Rekhta-style diacritic house style: ā ī ū ṛ ṭ ḍ ġ are already
+# right, so only the nasals, sibilants and mid vowels are remapped; macrons
+# and retroflex underdots are kept (not NFD-stripped like _deaccent_roman).
+_IAST_REKHTA_MAP = {
+    "ē": "e", "ō": "o",
+    "ṃ": "ñ", "ṅ": "ñ", "ñ": "ñ", "ṇ": "ñ",
+    "ś": "sh", "ṣ": "sh", "ḥ": "h",
+}
+
 
 def _strip_perso(s: str, table: dict) -> str:
     """Replace every leaked Perso-Arabic codepoint via ``table``; drop any that
@@ -91,31 +100,47 @@ def _deaccent_roman(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
 
-def _ak_word(word: str):
+def _reaccent_roman(s: str) -> str:
+    """Like ``_deaccent_roman`` but keeps the Rekhta-style marks (ā ī ū ṛ ṭ ḍ
+    ġ ñ): remap only the nasals / sibilants / mid vowels, and drop stray
+    *combining* marks without decomposing the precomposed letters we want."""
+    s = unicodedata.normalize("NFC", s)
+    s = "".join(_IAST_REKHTA_MAP.get(ch, ch) for ch in s)
+    s = s.replace("ch", "\x00").replace("c", "ch").replace("\x00", "chh")
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.replace("_", "").replace("ʼ", "").replace("'", "")
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def _ak_word(word: str, style: str = "plain"):
     """OOV fallback. A fully-vowelled word is read by Aksharamukha (and the
     result repaired so it never leaks); every other word -- the common case --
     goes to the rule engine's character rules, which Aksharamukha cannot match
     on schwa restoration, silent ع/ء and interior punctuation. Any Aksharamukha
-    error or empty/garbled result also falls back to the rule engine."""
+    error or empty/garbled result also falls back to the rule engine.
+
+    ``style`` is forwarded to the rule fallback; the Aksharamukha IAST reading
+    is mapped to the Rekhta-style marks instead of being stripped."""
     if _ak is None or not _HARAKAT.search(word):
-        return _rule._transliterate_word_rule_based(word)
+        return _rule._transliterate_word_rule_based(word, style)
     # mid-word ع/ء is a silent seat (strip it); word-initial ع/ء is a vowel
     # seat -- hand it to Aksharamukha as an alif so the vowel still renders.
     seed = (word[:1].translate(_INITIAL_SEAT)
             + word[1:].translate(_DROP_BEFORE_AK))
     if not seed:
-        return _rule._transliterate_word_rule_based(word)
+        return _rule._transliterate_word_rule_based(word, style)
+    clean = _reaccent_roman if style == "diacritic" else _deaccent_roman
     try:
         deva = _strip_perso(_ak.process("Urdu", "Devanagari", seed), _P2D)
-        roman = _strip_perso(_deaccent_roman(_ak.process("Urdu", "IAST", seed)),
-                             _P2R)
+        roman = _strip_perso(clean(_ak.process("Urdu", "IAST", seed)), _P2R)
     except Exception:  # noqa: BLE001 - Aksharamukha failure is not our crash
-        return _rule._transliterate_word_rule_based(word)
+        return _rule._transliterate_word_rule_based(word, style)
     if not deva.strip() or not roman.strip():
-        return _rule._transliterate_word_rule_based(word)
+        return _rule._transliterate_word_rule_based(word, style)
     return deva, roman
 
 
-def transliterate(text: str):
+def transliterate(text: str, style: str = "plain"):
     """Main entry point. Returns ``(devanagari_text, roman_text)``."""
-    return _rule.transliterate_with(_ak_word, text)
+    return _rule.transliterate_with(
+        lambda w: _ak_word(w, style), text, style=style)

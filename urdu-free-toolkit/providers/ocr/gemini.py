@@ -21,7 +21,7 @@ class GeminiOcr(BaseProvider):
         kind="api",
         needs=["GOOGLE_API_KEY"],
         note="Free key from aistudio.google.com. Top accuracy on Nastaliq; restores vowels.",
-        price="Free tier · ~$0.003/img",
+        price="Free tier · ≈ $0.003 / image",
     )
 
     def available(self) -> tuple[bool, str]:

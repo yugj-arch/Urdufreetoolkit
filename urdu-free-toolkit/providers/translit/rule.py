@@ -29,13 +29,18 @@ class RuleTranslit(BaseProvider):
     )
 
     def translit(self, text: str, opts: TranslitOpts) -> TranslitResult:
-        t = self._timed(_rule.transliterate, text)
+        def _both():
+            deva, roman = _rule.transliterate(text, style="plain")
+            _, roman_dia = _rule.transliterate(text, style="diacritic")
+            return deva, roman, roman_dia
+
+        t = self._timed(_both)
         if not t["ok"]:
             return TranslitResult(provider_id=self.info.id, ok=False,
                                   error=t["error"], ms=t["ms"])
-        deva, roman = t["value"]
+        deva, roman, roman_dia = t["value"]
         return TranslitResult(provider_id=self.info.id, ok=True, ms=t["ms"],
-                              devanagari=deva, roman=roman)
+                              devanagari=deva, roman=roman, roman_diacritic=roman_dia)
 
 
 PROVIDER = RuleTranslit()

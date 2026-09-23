@@ -75,7 +75,7 @@ class GoogleVisionOcr(BaseProvider):
         kind="api",
         needs=["GOOGLE_VISION_KEY"],
         note="GCP Vision API key. DOCUMENT_TEXT_DETECTION with an Urdu hint; strong on Nastaliq.",
-        price="~$1.50 / 1k images",
+        price="≈ $0.0015 / image",
     )
 
     def available(self) -> tuple[bool, str]:

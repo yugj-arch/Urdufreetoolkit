@@ -84,32 +84,35 @@ def api_ocr():
 
 @app.post("/api/transliterate")
 def api_transliterate():
-    """JSON: `text`, `providers`, `roman_style`, `targets`. Returns one row per
-    provider."""
+    """JSON: `text`, `providers`, `targets`. Returns one row per provider, each
+    carrying both `roman` (plain) and `roman_diacritic` (Rekhta-style marks) so
+    the UI toggle can swap between them with no re-run."""
     data = request.get_json(force=True) or {}
     text = (data.get("text") or "").strip()
     ids = data.get("providers") or []
     if not text:
         return jsonify({"error": "No text provided."}), 400
     opts = TranslitOpts(
-        roman_style=data.get("roman_style", "natural"),
         targets=tuple(data.get("targets") or ("devanagari", "roman")),
     )
     results = runner.run(Capability.TRANSLIT, ids,
                          lambda p: p.translit(text, opts), timeout_s=120)
     return jsonify({"results": [
         {"provider_id": r.provider_id, "ok": r.ok, "error": r.error, "ms": r.ms,
-         "devanagari": getattr(r, "devanagari", ""), "roman": getattr(r, "roman", "")}
+         "devanagari": getattr(r, "devanagari", ""),
+         "roman": getattr(r, "roman", ""),
+         "roman_diacritic": getattr(r, "roman_diacritic", "")}
         for r in results]})
 
 
 @app.post("/api/batch")
 def api_batch():
     """Multipart: `images` (repeated), `ocr_providers` + `translit_providers`
-    (comma lists), `roman_style`. Streams one SSE `data:` row per
-    (file x OCR engine x transliteration engine), a `{"progress", "total"}` line
-    after each file, then `{"done": true}`. A single engine failing shows up as
-    an ``error`` on its row, never as an HTTP 500."""
+    (comma lists). Streams one SSE `data:` row per
+    (file x OCR engine x transliteration engine) — each translit row carries
+    both `roman` and `roman_diacritic` — a `{"progress", "total"}` line after
+    each file, then `{"done": true}`. A single engine failing shows up as an
+    ``error`` on its row, never as an HTTP 500."""
     files = [f for f in request.files.getlist("images") if f.filename]
     if not files:
         return jsonify({"error": "No images uploaded."}), 400
@@ -117,7 +120,7 @@ def api_batch():
     if not ocr_ids:
         return jsonify({"error": "Pick at least one OCR engine."}), 400
     tr_ids = [s for s in (request.form.get("translit_providers") or "").split(",") if s]
-    opts = TranslitOpts(roman_style=request.form.get("roman_style", "natural"))
+    opts = TranslitOpts()
     images = [(f.filename, f.read()) for f in files[:config.batch_max_files()]]
     total = len(images)
 
@@ -132,6 +135,7 @@ def api_batch():
                 base = {
                     "file": name, "ocr_engine": o.provider_id, "urdu": text,
                     "translit_engine": "", "devanagari": "", "roman": "",
+                    "roman_diacritic": "",
                     "ms": o.ms, "error": "" if o.ok else o.error,
                 }
                 if not o.ok or not text or not tr_ids:
@@ -144,6 +148,7 @@ def api_batch():
                                 "ms": o.ms + t.ms,
                                 "devanagari": getattr(t, "devanagari", "") if t.ok else "",
                                 "roman": getattr(t, "roman", "") if t.ok else "",
+                                "roman_diacritic": getattr(t, "roman_diacritic", "") if t.ok else "",
                                 "error": "" if t.ok else t.error})
             yield emit({"progress": i, "total": total})
         yield 'data: {"done": true}\n\n'
@@ -175,5 +180,13 @@ def api_settings_post():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000, threaded=True, use_reloader=True)
+    # The reloader is off by default: this repo often lives under a sync client
+    # (OneDrive/Dropbox) whose constant mtime churn makes Werkzeug restart in a
+    # loop and wedge — in-flight requests die and the browser sees
+    # "Failed to fetch". Set URDU_RELOAD=1 if your checkout isn't in a synced dir.
+    import os
+
+    use_reloader = os.environ.get("URDU_RELOAD") == "1"
+    app.run(debug=True, host="0.0.0.0", port=5000, threaded=True,
+            use_reloader=use_reloader)
 

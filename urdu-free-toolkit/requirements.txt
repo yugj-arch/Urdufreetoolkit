@@ -39,7 +39,6 @@ fonttools               # synthetic renderer font handling
 
 # --- transliteration (offline) ---
 aksharamukha            # script mapping; best with harakat
-uroman                  # universal romanizer (Roman only, no vowel restoration)
 # PyICU                 # ICU Arabic-Latin transform — needs prebuilt wheel / ICU dev libs;
                         #   skipped by default because it has no Windows/py3.13 wheel
 

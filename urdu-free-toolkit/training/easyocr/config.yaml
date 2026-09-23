@@ -1,30 +1,49 @@
-# Fine-tune config skeleton for EasyOCR's Urdu recognizer via Clova
-# deep-text-recognition-benchmark. VERIFY the architecture + character set
-# against your installed easyocr version before training — see train.md step 2.
+# Fine-tune config for EasyOCR's Urdu/Arabic recognizer (Clova
+# deep-text-recognition-benchmark). VERIFIED against the installed easyocr
+# package (see train.md step 2) -- this is NOT read by DTRB's train.py
+# directly (it has no --config flag; it's pure argparse CLI), it's read by
+# run_train.py, which translates it into the real CLI invocation.
 experiment_name: urdu_ft
-train_data: data/lmdb/train
+train_data: data/lmdb/train    # resolved relative to the urdu-free-toolkit app root by run_train.py
 valid_data: data/lmdb/val
 manualSeed: 1111
-workers: 4
-batch_size: 128
-num_iter: 30000
-valInterval: 1000
-saved_model: ""          # path to the EasyOCR arabic_g2 .pth to fine-tune from (train.md step 2)
+workers: 0        # DTRB's LmdbDataset holds an open lmdb.Environment, which isn't
+                  # picklable -- Windows' spawn-based multiprocessing DataLoader
+                  # workers need >0 to crash with "cannot pickle 'Environment' object".
+                  # 0 = load in the main process; fine at this dataset size.
+batch_size: 32          # reduced from DTRB's 192/128 default -- fits a 6GB card
+num_iter: 2000
+valInterval: 200
+saved_model: ""          # empty -> run_train.py defaults to ~/.EasyOCR/model/arabic.pth
 FT: true
 adam: true
 lr: 0.0005
-# --- architecture (EasyOCR "generation2" recognizer) ---
+# --- architecture -- MUST match easyocr.recognition.get_recognizer's
+# 'generation1' network_params exactly, or the fine-tuned .pth won't load
+# back into EasyOCR's Reader. Verified 2026-09-23 against installed
+# easyocr's easyocr.py (recog_network == 'generation1' branch) and
+# model/model.py (ResNet_FeatureExtractor, not VGG -- that's generation2).
 Transformation: None
-FeatureExtraction: VGG
+FeatureExtraction: ResNet
 SequenceModeling: BiLSTM
 Prediction: CTC
 input_channel: 1
-output_channel: 256
-hidden_size: 256
-imgH: 64
-imgW: 600
+output_channel: 512
+hidden_size: 512
+imgH: 32
+imgW: 100
 PAD: true
-# --- label space ---
-character: ""             # paste EasyOCR's Urdu/Arabic charset here (train.md step 2)
+# --- label space -- copied verbatim from
+# easyocr.config.recognition_models['gen1']['arabic_g1']['characters'].
+# Order matters (CTCLabelConverter builds the class index from it); do not
+# reorder or this stops matching the pretrained checkpoint's output layer.
+character: '0123456789!"#$%&''()*+,-./:;<=>?@[\]^_`{|}~ abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ٠١٢٣٤٥٦٧٨٩«»؟،؛ءآأؤإئااًبةتثجحخدذرزسشصضطظعغفقكلمنهوىيًٌٍَُِّْٰٓٔٱٹپچڈڑژکڭگںھۀہۂۃۆۇۈۋیېےۓە'
 sensitive: false
 data_filtering_off: true
+batch_max_length: 60
+# DTRB's own default (select_data="MJ-ST") expects train_data to contain
+# named MJSynth/SynthText subfolders. Our LMDB is a single flat dataset, so
+# select_data="/" (hierarchical_dataset's own "match everything" convention)
+# + a single-entry batch_ratio is what actually walks it.
+select_data: "/"
+batch_ratio: "1"

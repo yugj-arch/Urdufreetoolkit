@@ -26,41 +26,63 @@ PY
 ## 1. Clone the trainer
 
 ```bash
-git clone https://github.com/JaidedAI/deep-text-recognition-benchmark
+git clone https://github.com/clovaai/deep-text-recognition-benchmark
 cd deep-text-recognition-benchmark
 pip install -r requirements.txt
+pip install lmdb fire   # lmdb dataset writer + create_lmdb_dataset.py's CLI
 ```
 
-## 2. VERIFY the architecture + character set
+(Not `JaidedAI/deep-text-recognition-benchmark` — that repo doesn't exist.
+EasyOCR's own org is JaidedAI, but the trainer it was built on top of is
+Clova AI Research's original repo, above.)
 
-EasyOCR's Urdu model is the "arabic_g2" (generation 2) recognizer. Before
-training, confirm against your installed `easyocr` version:
+## 2. VERIFIED architecture + character set
+
+EasyOCR's Urdu model is `arabic_g1` -- **generation 1**, not generation 2.
+Confirmed 2026-09-23 against the installed `easyocr` package
+(`easyocr.easyocr.Reader.__init__`, the `arabic_lang_list` branch, and
+`easyocr.recognition.get_recognizer`'s `'generation1'` case): generation 1
+uses `easyocr/model/model.py` (**ResNet** feature extractor, not VGG --
+VGG is generation 2's `vgg_model.py`), `network_params =
+{"input_channel": 1, "output_channel": 512, "hidden_size": 512}`, and
+`imgH=32` (the `AlignCollate` default). `training/easyocr/config.yaml` is
+already filled in with these values plus the exact `character` string from
+`easyocr.config.recognition_models["gen1"]["arabic_g1"]["characters"]`
+(order matters -- it fixes the pretrained checkpoint's output-layer class
+indices). If you're on a different `easyocr` version, re-verify:
 
 ```bash
 python - <<'PY'
-import easyocr, json, pathlib
-# Locate the arabic_g2 weights EasyOCR downloaded on first run:
-print(pathlib.Path.home() / ".EasyOCR" / "model")
-# Read easyocr's own config for the arabic recognizer to get the exact
-# architecture block and character string, then paste them into config.yaml.
 import easyocr.config as c
-print(getattr(c, "recognition_models", None))
+print(c.recognition_models["gen1"]["arabic_g1"])
 PY
 ```
 
-Update `training/easyocr/config.yaml`'s `character:` field and the
-`Transformation` / `FeatureExtraction` / `SequenceModeling` / `Prediction`
-block to match exactly what you find — a mismatch trains a model EasyOCR's
-`Reader` can't load.
+Locate the weights EasyOCR downloaded on first run (`arabic.pth`) and set
+`saved_model:` in `config.yaml` to that path, so training fine-tunes from it
+instead of from scratch:
 
-Set `saved_model:` in `config.yaml` to the `.pth` path you found, so training
-fine-tunes from it instead of from scratch.
+```bash
+python -c "import pathlib; print(pathlib.Path.home() / '.EasyOCR' / 'model' / 'arabic.pth')"
+```
 
 ## 3. Train
 
+`train.py` in the Clova repo is plain argparse -- it has **no `--config`
+flag**. Use this project's `run_train.py`, which reads `config.yaml` and
+invokes `train.py` with the equivalent CLI args (as a real argument list,
+not a shell string, so the Urdu/Arabic `character` set never needs
+shell-escaping):
+
 ```bash
-python train.py --config /path/to/urdu-free-toolkit/training/easyocr/config.yaml
+cd urdu-free-toolkit
+python training/easyocr/run_train.py --dtrb-dir /path/to/deep-text-recognition-benchmark
+# sanity-check the argv first without running it:
+python training/easyocr/run_train.py --dtrb-dir /path/to/deep-text-recognition-benchmark --dry-run
 ```
+
+`config.yaml`'s `batch_size: 32` is sized for a 6GB card; raise it if you
+have more VRAM (a T4's 16GB comfortably fits DTRB's own default of 192).
 
 ## 4. Convert the checkpoint into an EasyOCR custom model
 
@@ -92,15 +114,14 @@ python -m eval.run_eval --engines easyocr --write-baseline
 ## Colab cell (starting point)
 
 ```python
-!pip install -q lmdb
-!git clone -q https://github.com/JaidedAI/deep-text-recognition-benchmark
-%cd deep-text-recognition-benchmark
-!pip install -q -r requirements.txt
-!python train.py --config /content/config.yaml
+!pip install -q lmdb fire pyyaml
+!git clone -q https://github.com/clovaai/deep-text-recognition-benchmark
+!python /content/urdu-free-toolkit/training/easyocr/run_train.py \
+    --dtrb-dir /content/deep-text-recognition-benchmark
 ```
 
 ## RunPod
 
 Use a PyTorch base image (CUDA 11.8+), mount your `data/lmdb` volume, run the
-same `train.py` command inside a tmux/screen session so it survives a dropped
-connection.
+same `run_train.py` command inside a tmux/screen session so it survives a
+dropped connection.

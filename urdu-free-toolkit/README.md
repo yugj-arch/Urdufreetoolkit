@@ -21,13 +21,13 @@ Every step is a list of small **provider** modules under `providers/<capability>
 | Capability | What it does | Shown in the picker (curated — max 4 per step) |
 |---|---|---|
 | **OCR** | image → Urdu text | OpenAI GPT vision, Google Cloud Vision *(API)*, PaddleOCR, EasyOCR *(offline)* |
-| **Transliteration** | Urdu → Devanagari + Roman | GPT *(API)*, Rule engine, Aksharamukha, uroman *(all offline, no key)* |
+| **Transliteration** | Urdu → Devanagari + Roman | GPT *(API)*, Rule engine, Aksharamukha *(offline, no key)* |
 
 The picker shows a **curated shortlist** (at most four per step) with a rough
 **price badge** on each engine — offline engines are free; API estimates assume
 one short image / line and drift with provider pricing. Every other engine still
 ships (Gemini vision, Claude vision + transliteration, Surya, RapidOCR, docTR,
-TrOCR, Tesseract, uroman, PyICU) and is re-enabled by editing
+TrOCR, Tesseract, PyICU) and is re-enabled by editing
 `providers/curation.py`. API model ids are overridable via `OPENAI_MODEL`,
 `ANTHROPIC_MODEL`, `GEMINI_MODEL`.
 
