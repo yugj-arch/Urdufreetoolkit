@@ -51,7 +51,9 @@ def test_noon_ghunna_in_fallback_is_n_tilde():
     assert dia("مہرباں") == "maharbāñ"
 
 
-def test_retroflex_long_vowels_and_nasal_together():
+def test_retroflex_long_vowels_and_nasal_together(monkeypatch):
+    # character fallback only: the exact dictionary spells this word laṛkiyāñ
+    monkeypatch.setattr(rule_engine, "_EXACT", {})
     assert dia("لڑکیاں") == "laṛkīāñ"
 
 
@@ -133,8 +135,8 @@ def test_aksharamukha_engine_style_kwarg():
 def test_aksharamukha_provider_returns_both_roman_spellings():
     r = AKSHARA.translit("لڑکیاں", TranslitOpts())
     assert r.ok
-    assert r.roman == "larkiaan"
-    assert r.roman_diacritic == "laṛkīāñ"
+    assert r.roman == "ladkiyan"                 # exact dictionary, both spellings
+    assert r.roman_diacritic == "laṛkiyāñ"
 
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ Every step is a list of small **provider** modules under `providers/<capability>
 | Capability | What it does | Shown in the picker (curated — max 4 per step) |
 |---|---|---|
 | **OCR** | image → Urdu text | OpenAI GPT vision, Google Cloud Vision *(API)*, PaddleOCR, EasyOCR *(offline)* |
-| **Transliteration** | Urdu → Devanagari + Roman | GPT *(API)*, Rule engine, Aksharamukha *(offline, no key)* |
+| **Transliteration** | Urdu → Devanagari + Roman | **Urdu Neural** *(offline, trained — the default)*, GPT *(API)*, Rule engine, Aksharamukha *(offline, no key)* |
 
 The picker shows a **curated shortlist** (at most four per step) with a rough
 **price badge** on each engine — offline engines are free; API estimates assume
@@ -63,6 +63,21 @@ copy-paste runbook in `training/README.md`. Once a model exists, point the
 provider at it via `OCR_EASYOCR_RECOG_NETWORK` / `OCR_PADDLE_REC_DIR` — with no
 model set, the stock weights are used.
 
+### Neural transliteration (offline, trained)
+
+The default transliteration engine (`neural`, `neural_translit.py`) is a small
+character-level Transformer trained here on free, human-authored data only —
+Wiktionary Urdu + Hindi (kaikki.org), AI4Bharat Aksharantar and Google Dakshina
+(attribution in `data/SOURCES.md`); no LLM output was used as a label. Per word
+it goes curated dictionary → 23k-word gold lexicon → model (beam search,
+reranked by how ~47k words are actually romanised by people), and every Roman
+spelling (plain `kitaab` and Rekhta-style `kitāb`) plus the Devanagari come from
+one reading, so the three never disagree. Lines, punctuation, digits and Latin
+text pass through untouched. Weights + tables ship in `data/translit_model/`
+(~16 MB); retraining is a runbook in `training/translit/README.md`, and
+`python -m training.translit.evaluate` benchmarks it against the rule engine and
+any API engine you have a key for.
+
 ### Modes
 
 - **Single image** — upload, tick engines, compare columns, pick the best, then
@@ -93,10 +108,10 @@ hides the root `requirements.txt` from the build).
 ## Honest limitations
 
 - **Vowel restoration is fundamentally a guess.** Urdu script omits short vowels;
-  Devanagari and Roman need them. Offline engines fill them with dictionaries and
-  heuristics and will be wrong on uncommon words, proper nouns, and poetry. Only
-  a context-aware LLM (the GPT / Claude / Gemini providers) genuinely reasons
-  them out. Always check
+  Devanagari and Roman need them. The neural engine resolves most of them from
+  its lexicon and training, but it reads one word at a time: an unwritten
+  izafat (دل ناداں = dil-e-nādāñ) or a homograph beyond the few it has context
+  rules for (میں, کیا) can still come out wrong, and rare names are a guess. Always check
   the extracted Urdu before trusting the output — that's what the compare view is
   for.
 - **`python app.py` is the dev server** (`app.run(debug=True)`). The Vercel
@@ -116,6 +131,8 @@ config.py              where-am-I-running switches (Vercel: batch cap, read-only
 runner.py              run N providers in parallel (+ SSE stream), per-provider timeout
 settings.py            read/write API keys to .env
 transliterate.py       the offline rule-based transliteration engine
+neural_translit.py     the trained neural transliteration engine (default)
+urdu_nn/               its runtime pieces: spelling schemes (scheme.py) + seq2seq model (model.py)
 api/index.py           Vercel entrypoint — re-exports the Flask app
 vercel.json / api/requirements.txt / .vercelignore   deploy config — see DEPLOY.md
 providers/
@@ -128,6 +145,7 @@ providers/
   ocr/gpt.py           OpenAI GPT vision OCR   (ocr/claude.py, ocr/gemini.py, ...)
   ocr/_pipeline.py     shared preprocess -> recognize -> RTL -> normalize -> translit-fill
   ocr/paddle.py        ocr/easyocr_p.py       both run through _pipeline.py
+  translit/neural.py   wraps neural_translit.py
   translit/rule.py     wraps transliterate.py
   translit/gpt.py      OpenAI GPT transliteration
 static/                app.css, app.js  (no CDN — system fonts only)
@@ -135,5 +153,7 @@ templates/index.html
 tests/                 pytest; heavy providers gated behind RUN_HEAVY=1
 eval/                  CER/WER scoring of every OCR engine vs cached GPT refs
 training/              Phase-2 OCR fine-tune dataset tooling + GPU runbook
+training/translit/     neural transliterator: build_data -> train -> evaluate -> ship (runbook inside)
+data/translit_model/   shipped weights + gold lexicon + evidence + English-loanword tables
 docs/superpowers/       design spec + phased implementation plans
 ```

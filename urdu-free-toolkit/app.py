@@ -29,6 +29,23 @@ load_dotenv(settings.env_path())
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.max_content_length()
 
+DEFAULT_TRANSLIT_PROVIDER = "neural"
+
+
+def _translit_provider_ids(requested) -> list[str]:
+    """Use the neural hybrid by default, with an available-provider fallback.
+
+    Explicit selections are always respected.  The fallback keeps development
+    installs and tests useful when the shipped neural assets are absent.
+    """
+    if requested:
+        return list(requested)
+    rows = registry.for_ui(Capability.TRANSLIT)
+    available = [row["id"] for row in rows if row["available"]]
+    if DEFAULT_TRANSLIT_PROVIDER in available:
+        return [DEFAULT_TRANSLIT_PROVIDER]
+    return available[:1]
+
 
 @app.get("/")
 def index():
@@ -89,7 +106,7 @@ def api_transliterate():
     the UI toggle can swap between them with no re-run."""
     data = request.get_json(force=True) or {}
     text = (data.get("text") or "").strip()
-    ids = data.get("providers") or []
+    ids = _translit_provider_ids(data.get("providers"))
     if not text:
         return jsonify({"error": "No text provided."}), 400
     opts = TranslitOpts(

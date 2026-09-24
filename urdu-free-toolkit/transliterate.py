@@ -352,6 +352,7 @@ CHAR_FOLDS = {
     "\u0626": "\u06cc",  # yeh + hamza -> Urdu yeh
     "\u0621": "",         # bare hamza: silent seat, drop
     "\u0629": "\u06c1",  # teh marbuta -> gol he
+    "\u06c3": "\u062a",  # Urdu teh marbuta goal: read t (zakaat, rahmat, soorat)
     # NB: Perso-Arabic punctuation (\u06d4 \u060c \u061b \u061f) is deliberately NOT folded here
     # -- it is script-specific (\u06d4 -> danda in Devanagari) and handled by
     # PUNCT_TRANSLIT / _render_punct after tokenisation.
@@ -644,18 +645,51 @@ def _load_lexicon(path=_LEXICON_PATH) -> dict[str, tuple[str, str]]:
 _LEXICON: dict[str, tuple[str, str]] = _load_lexicon(_LEXICON_LLM_PATH)
 _LEXICON.update(_load_lexicon(_LEXICON_PATH))
 
+# ---------------------------------------------------------------------------
+# 4. Exact dictionary: the 10,000 most frequent Urdu word forms, reviewed
+#    in Devanagari, plain Roman and Rekhta-style Roman
+#    (training/translit/build_dictionary.py). Shared with neural_translit.
+# ---------------------------------------------------------------------------
+
+EXACT_DICTIONARY_PATH = Path(__file__).with_name("data") / "translit_dictionary.tsv"
+
+
+def load_exact_dictionary(path=EXACT_DICTIONARY_PATH) -> dict[str, tuple[str, str, str]]:
+    """urdu -> (devanagari, plain roman, rekhta roman); {} when the file is absent."""
+    out: dict[str, tuple[str, str, str]] = {}
+    if not path:
+        return out
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        cols = line.split("\t")
+        if line.startswith("#") or len(cols) < 4 or not all(cols[:4]):
+            continue
+        out[unicodedata.normalize("NFC", cols[0])] = (cols[1], cols[2], cols[3])
+    return out
+
+
+_EXACT: dict[str, tuple[str, str, str]] = {
+    _fold_key(k): v for k, v in load_exact_dictionary().items()}
+
 
 def transliterate_word_with(oov_fn, word: str, style: str = "plain"):
-    """Curated dictionary and bundled lexicon first (both exact); only a token
-    that misses both is handed to ``oov_fn`` -- the pluggable out-of-vocabulary
-    fallback. ``oov_fn(word) -> (devanagari, roman)``.
+    """Curated dictionary, exact dictionary and bundled lexicon first (all
+    exact); only a token that misses them is handed to ``oov_fn`` -- the
+    pluggable out-of-vocabulary fallback. ``oov_fn(word) -> (devanagari, roman)``.
 
     In ``style="diacritic"`` a curated/lexicon hit's plain Roman value is run
-    through the conservative ``_diacritize_curated`` transform (the oov_fn is
+    through the conservative ``_diacritize_curated`` transform; an exact
+    dictionary hit carries its own reviewed Rekhta spelling (the oov_fn is
     expected to already emit the style it was built for)."""
     if word in COMMON_WORDS:       # curated: always wins
         d, r = COMMON_WORDS[word]
         return (d, _diacritize_curated(word, r)) if style == "diacritic" else (d, r)
+    exact = _EXACT.get(word)       # harakat-bearing words miss on purpose: the
+    if exact:                      # writer spelled the vowels out (حَسَن, not حسن)
+        return (exact[0], exact[2]) if style == "diacritic" else (exact[0], exact[1])
     if word in _LEXICON:           # bundled breadth layer
         d, r = _LEXICON[word]
         return (d, _diacritize_curated(word, r)) if style == "diacritic" else (d, r)

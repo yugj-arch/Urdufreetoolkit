@@ -64,6 +64,12 @@ def test_transliterate_returns_row(client):
     assert rows[0]["devanagari"] == "देव" and rows[0]["roman"] == "dev"
 
 
+def test_transliterate_uses_best_available_default(client):
+    r = client.post("/api/transliterate", json={"text": "میں"})
+    rows = r.get_json()["results"]
+    assert [row["provider_id"] for row in rows] == ["tr_fake"]
+
+
 def test_transliterate_row_carries_both_roman_spellings(client):
     r = client.post("/api/transliterate", json={"text": "میں", "providers": ["tr_fake"]})
     row = r.get_json()["results"][0]
