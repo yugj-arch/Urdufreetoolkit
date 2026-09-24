@@ -6,8 +6,8 @@ Every Urdu run (see ``urdu_nn.rekhta_text``) from
 * ``poem``  -- Urdu Wikisource ghazals/nazms (212k lines),
 * ``wiki``  -- Dakshina's Urdu Wikipedia sentences (prose; capped),
 * ``dak``   -- Dakshina's romanised dev/test sentences (human Roman: eval),
-* ``word``  -- single words from the gold lexicon, the exact dictionary,
-  Dakshina and Aksharantar (vocabulary the line corpora rarely repeat),
+* ``word``  -- the gold words (Wiktionary lexicon + reviewed dictionary),
+  labelled only to learn Rekhta's spelling conventions for them,
 
 goes through ``ur2hi`` (Urdu -> Devanagari, exactly the model card's greedy
 decoding) and the Devanagari straight back through ``hi2ur``. A label whose
@@ -27,7 +27,6 @@ import json
 import re
 import sys
 import time
-import zipfile
 from pathlib import Path
 
 from urdu_nn.rekhta_text import urdu_runs
@@ -80,6 +79,10 @@ def wiki_items(limit: int):
 
 
 def word_items(limit: int):
+    """The gold words (Wiktionary lexicon + reviewed dictionary). The teacher
+    is weak on isolated rare words, so ``dataset`` only uses its reading of
+    these to learn Rekhta's *conventions* (nukta, ँ/ं, ain) where it agrees
+    with the gold spelling."""
     seen = set()
     sources = []
     lex = ROOT / "data" / "translit_ds" / "lexicon_full.json"
@@ -87,19 +90,8 @@ def word_items(limit: int):
         sources.append(list(json.loads(lex.read_text(encoding="utf-8"))))
     dic = ROOT / "data" / "translit_dictionary.tsv"
     if dic.exists():
-        sources.append([l.split("\t")[0] for l in dic.read_text(encoding="utf-8").splitlines()[1:]])
-    lexd = DAK / "lexicons" / "ur.translit.sampled.train.tsv"
-    if lexd.exists():
-        sources.append([l.split("\t")[0] for l in lexd.read_text(encoding="utf-8").splitlines()])
-    ak = RAW / "aksharantar_urd.zip"
-    if ak.exists():
-        z = zipfile.ZipFile(ak)
-        words = []
-        for name in z.namelist():
-            if name.endswith(".json"):
-                for line in z.read(name).decode("utf-8").splitlines():
-                    words.append(json.loads(line)["native word"])
-        sources.append(words)
+        sources.append([l.split("\t")[0] for l in dic.read_text(encoding="utf-8").splitlines()
+                        if l and not l.startswith("#")])
     n = 0
     for src in sources:
         for w in src:
@@ -169,8 +161,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="dak,poem,wiki,word")
     ap.add_argument("--device", default="cpu")
-    ap.add_argument("--wiki-limit", type=int, default=300_000)
-    ap.add_argument("--word-limit", type=int, default=200_000)
+    ap.add_argument("--wiki-limit", type=int, default=150_000)
+    ap.add_argument("--word-limit", type=int, default=60_000)
     ap.add_argument("--batch", type=int, default=128)
     a = ap.parse_args(argv)
     label(a.only.split(","), a.device, a.wiki_limit, a.word_limit, batch=a.batch)

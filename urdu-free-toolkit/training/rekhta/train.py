@@ -95,11 +95,12 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--limit", type=int, default=0, help="train rows (0 = all), for smoke runs")
+    ap.add_argument("--device", default=None, help="cuda / cpu (default: cuda when present)")
     args = ap.parse_args(argv)
 
     torch.manual_seed(args.seed)
     random.seed(args.seed)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     train, dev = load("train"), load("dev")
     random.shuffle(train)
     random.shuffle(dev)
