@@ -1,19 +1,45 @@
 {
- "neural": {
-  "label": "neural (offline)",
+ "neural+dict": {
+  "label": "neural (offline) + exact dictionary (9,994 words)",
   "words": {
-   "deva_acc": 1.0,
-   "roman_acc": 1.0,
-   "n": 1,
+   "deva_acc": 0.6316964285714286,
+   "roman_acc": 0.608,
+   "n": 500,
    "coverage": 1.0,
-   "errors": []
+   "errors": [
+    "چکیوں  gold चक्कियों|chakkiyon  got चुकियों|chukiyon",
+    "بھولوں  gold भूलों|bhoolon  got भोलूँ|bholoon",
+    "اساتذہ  gold असातिज़ा|asaatiza  got असातज़ा|asaatza",
+    "نثار  gold निसार|nisaar  got नसार|nasaar",
+    "پودینے  gold None|podeene  got पौदीने|paudeene",
+    "مکھ  gold मुख|mukh  got मक्ख|makkh",
+    "آٹھویں  gold आठवें|aathwein  got आठवीं|aathwin",
+    "علیحدہ  gold अलहदा|alehda  got अलैह्दा|alaihda",
+    "انبن  gold अनबन|anban  got अंबन|amban",
+    "بلی  gold बिल्ली|billi  got बली|bali",
+    "منڈے  gold मुंडे|munde  got मंडे|mande",
+    "گھڑنا  gold गढ़ना|gadhna  got घड़ना|ghadna",
+    "بھگتا  gold भुगता|bhugta  got भगता|bhagta",
+    "پشتو  gold पश्तो|pashto  got पिश्तो|pishto",
+    "سچی  gold सच्ची|sachchi  got सची|sachi",
+    "اماں  gold अम्माँ|amman  got उमाँ|uman",
+    "گرجتی  gold गरजती|garajti  got गिरजती|girajti",
+    "اوطاق  gold उताक़|utaaq  got औताक़|autaaq",
+    "موسی  gold मूसा|moosa  got मूसी|moosi",
+    "انہتر  gold उनहत्तर|unhattar  got अनहित्र|anhitra",
+    "موسمو  gold मौसमो|mausamo  got मौसमो|mausmo",
+    "سوئی  gold सूई|sooi  got सोई|soi",
+    "سینٹو  gold सेंटो|sento  got सेंटू|seintu",
+    "سیارہ  gold सैयारा|saiyaara  got सियारा|siyaara",
+    "پھلجھڑیاں  gold फुलझड़ियाँ|phuljhadiyan  got फुलझुड़ियाँ|phuljhudiyan"
+   ]
   },
   "sents": {
-   "word_acc": 0.7308499475341028,
-   "cer": 0.08793686583990981,
-   "n": 150,
+   "word_acc": 0.7540867093105899,
+   "cer": 0.07252680558365365,
+   "n": 120,
    "coverage": 1.0
   },
-  "seconds": 48.0
+  "seconds": 29.4
  }
 }

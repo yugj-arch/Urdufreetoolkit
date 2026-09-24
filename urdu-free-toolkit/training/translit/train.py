@@ -107,6 +107,8 @@ def main(argv=None):
     ap.add_argument("--resume", action="store_true",
                     help="start from data/translit_model/model.pt (fresh optimizer)")
     ap.add_argument("--warmup", type=int, default=2000)
+    ap.add_argument("--label-smoothing", type=float, default=0.1,
+                    help="cross-entropy label smoothing (use 0.01-0.03 for final exact-match fine-tuning)")
     ap.add_argument("--avg", type=int, default=4,
                     help="also try the weight average of the last N epochs")
     args = ap.parse_args(argv)
@@ -151,7 +153,8 @@ def main(argv=None):
                     logits = model(src, tgt[:, :-1])
                 gold = tgt[:, 1:]
                 loss_tok = F.cross_entropy(logits.float().reshape(-1, logits.size(-1)),
-                                           gold.reshape(-1), ignore_index=PAD, label_smoothing=0.1,
+                                           gold.reshape(-1), ignore_index=PAD,
+                                           label_smoothing=args.label_smoothing,
                                            reduction="none").view(gold.shape)
                 ntok = (gold != PAD).sum(1).clamp(min=1)
                 loss = ((loss_tok.sum(1) / ntok) * w).sum() / w.sum()

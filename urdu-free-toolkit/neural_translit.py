@@ -4,12 +4,17 @@ backed by a trained character-level Transformer (``training/translit/``).
 
 Per word, most-trusted source first:
 
-  1. curated high-frequency words (``transliterate.COMMON_WORDS`` + the R
-     overrides below), with sentence-context rules for the few truly
-     ambiguous ones (میں main/mein, کیا kyā/kiyā)
-  2. the gold lexicon -- ~23k Urdu words and inflections from Wiktionary,
+  0. sentence-context rules for the few truly ambiguous words (میں
+     main/mein, کیا kyā/kiyā, بن ban/bin, سو so/sau, جلد jald/jild,
+     گر gir/gar, کل kul/kal)
+  1. the exact dictionary (``data/translit_dictionary.tsv``) -- the 10,000
+     most frequent Urdu word forms (~92% of running text), each reviewed
+     in all three spellings (``training/translit/build_dictionary.py``)
+  2. curated high-frequency words (``transliterate.COMMON_WORDS`` + the R
+     overrides below)
+  3. the gold lexicon -- ~23k Urdu words and inflections from Wiktionary,
      readings chosen with 700k human romanisations as tie-break evidence
-  3. the neural model (beam search) for everything else, its beam reranked
+  4. the neural model (beam search) for everything else, its beam reranked
      by how ~47k words are actually romanised by people (Aksharantar /
      Dakshina) -- evidence only decides vowels, never doubling
 
@@ -24,7 +29,7 @@ reading. Line breaks, punctuation, digits and Latin text pass through
 untouched: the engine never drops or invents a line.
 
 Degrades gracefully: without torch or the model file it still runs on the
-curated + lexicon tiers, with the rule engine for unknown words.
+dictionary + curated + lexicon tiers, with the rule engine for unknown words.
 """
 from __future__ import annotations
 
@@ -45,6 +50,7 @@ MODEL_PATH = MODEL_DIR / "model.pt"
 LEXICON_PATH = MODEL_DIR / "lexicon.json.gz"
 EVIDENCE_PATH = MODEL_DIR / "evidence.json.gz"
 ENGLISH_PATH = MODEL_DIR / "english.json"
+DICTIONARY_PATH = _rule.EXACT_DICTIONARY_PATH
 EVIDENCE_WEIGHT = 2.0      # how far human romanisations may pull the beam (tuned on Dakshina dev)
 
 # R readings for curated words whose Wiktionary-majority reading is a
@@ -58,31 +64,28 @@ CURATED_R = {
     "لیے": "liye", "لئے": "liye", "کر": "kar", "پر": "par", "جو": "jo",
 }
 
-# High-frequency words (top of Urdu Wikipedia's frequency list) that the gold
-# lexicon lacks and the model gets wrong -- mostly Arabic names, honorifics and
-# formal vocabulary. urdu -> (R, devanagari, plain-override-or-None).
-EXTRA = {
-    "سید": ("sayyid", "सय्यद", "syed"), "عباس": ("abbās", "अब्बास", None),
-    "عباسی": ("abbāsī", "अब्बासी", None), "مرزا": ("mirzā", "मिर्ज़ा", None),
-    "شیعہ": ("shī'a", "शिया", None), "شدہ": ("shuda", "शुदा", None),
-    "نامور": ("nāmvar", "नामवर", None), "اثرات": ("asrāt", "असरात", None),
-    "علامہ": ("allāma", "अल्लामा", None), "برائے": ("barā-e", "बरा-ए", None),
-    "اعلی": ("a'lā", "आला", None), "عددی": ("'adadī", "अददी", None),
-    "علیہ": ("alaih", "अलैह", None), "صلی": ("sallā", "सल्ला", None),
-    "وسلم": ("va-sallam", "व-सल्लम", None), "ازاں": ("azāñ", "अज़ाँ", None),
-    "نامکمل": ("nā-mukammal", "ना-मुकम्मल", None), "ویب": ("veb", "वेब", "web"),
-}
-
 # Arabic article: sun letters assimilate the l (ar-rahmān, as-salām, ad-dīn)
-_SUN_LETTERS = set("تثدذرزسشصضطظلن")
-_ART_DEVA = {"l": "ल", "r": "र", "s": "स", "ś": "श", "d": "द", "n": "न", "t": "त",
-             "ṭ": "त", "z": "ज़", "ṣ": "स"}
+_ART_CONS = {"ت": ("t", "त"), "ث": ("s", "स"), "د": ("d", "द"), "ذ": ("z", "ज़"),
+             "ر": ("r", "र"), "ز": ("z", "ज़"), "س": ("s", "स"), "ش": ("sh", "श"),
+             "ص": ("s", "स"), "ض": ("z", "ज़"), "ط": ("t", "त"), "ظ": ("z", "ज़"),
+             "ل": ("l", "ल"), "ن": ("n", "न")}
+_ART_READING = re.compile(r"^a(l|t|s|sh|d|z|r|n)-")
 
 _URDU_RUN = re.compile(r"[؀-ۿݐ-ݿ]+")
 _ZER = "ِ"
 _SENT_END = set("۔؟!?.\n")
 _PASSIVE_NEXT = {"گیا", "گئی", "گئے", "گیی", "جاتا", "جاتی", "جاتے", "جائے", "جا", "جانا"}
 _PERFECT_NEXT = {"ہے", "ہیں", "تھا", "تھی", "تھے", "ہوگا", "ہو"}
+_VERB_NEXT = _PASSIVE_NEXT | {"جاتا", "جاؤ", "جاؤں", "جائیں", "رہا", "رہی", "رہے", "رہیں",
+                              "سکتا", "سکتی", "سکتے", "سکا", "سکی", "سکے", "کر",
+                              "چکا", "چکی", "چکے", "گا", "گی", "گے"}
+_JALD_NEXT = {"ہی", "از", "سے", "بازی", "ہو", "ہوا", "ہوئی", "ہوئے", "ہوں",
+              "سو", "اٹھ", "آ", "جا", "چل", "کر", "پہنچ", "لوٹ", "واپس", "شروع",
+              "ختم", "مل", "بن"}
+_FALL_NEXT = {"پڑا", "پڑی", "پڑے", "پڑتا", "پڑتی", "پڑتے", "جائے", "جاتا", "جاتی", "جاتے"}
+_KUL_NEXT = {"آبادی", "تعداد", "رقبہ", "رقبے", "ملا", "رقم", "مجموعی", "وقتی",
+             "جماعتی", "تعدا", "لاگت", "ووٹ", "ووٹوں", "نمبر", "نمبروں", "اثاثے",
+             "آمدنی", "خرچ", "مدت", "لمبائی", "اراکین", "ارکان", "افراد", "سیٹوں"}
 _MAIN_PREV = {"اور", "کہ", "جب", "اگر", "تو", "مگر", "لیکن", "پھر", "کیونکہ", "بلکہ",
               "اب", "ہاں", "جو"}
 _MAIN_NEXT = {"نے", "ہوں", "خود"}
@@ -96,10 +99,14 @@ _IZAFAT = "\x02"
 class NeuralTransliterator:
     def __init__(self, model_path: Path = MODEL_PATH, lexicon_path: Path = LEXICON_PATH,
                  evidence_path: Path = EVIDENCE_PATH, english_path: Path = ENGLISH_PATH,
+                 dictionary_path: Path | None = DICTIONARY_PATH,
                  beam: int = 5, device: str = "cpu", evidence_weight: float = EVIDENCE_WEIGHT):
         self.beam = beam
         self.device = device
         self.evidence_weight = evidence_weight
+        # reviewed words: urdu -> (devanagari, plain, rekhta), used verbatim
+        self.exact: dict[str, tuple[str, str, str]] = {
+            norm_urdu(k): v for k, v in _rule.load_exact_dictionary(dictionary_path).items()}
         self.lexicon: dict[str, tuple[str | None, str]] = {}
         if lexicon_path.exists():
             with gzip.open(lexicon_path, "rt", encoding="utf-8") as fh:
@@ -217,14 +224,11 @@ class NeuralTransliterator:
 
     # -- curated tier -------------------------------------------------------------
 
-    def _curated(self, key: str, ctx: dict):
-        """-> (devanagari, plain, R-or-None) or None. ``ctx``: prev / next word
-        (None across a sentence boundary), sent_start, ne_before (نے earlier in
-        the sentence). R is None when it still has to come from the model."""
-        folded = _rule._fold_key(key)
-        if folded not in _rule.COMMON_WORDS:
-            return None
-        deva, plain = _rule.COMMON_WORDS[folded]
+    @staticmethod
+    def _context(key: str, ctx: dict):
+        """Homographs read from the sentence around them -> (devanagari,
+        plain, R) or None. ``ctx``: prev / next word (None across a sentence
+        boundary), sent_start, ne_before (نے earlier in the sentence)."""
         prev, nxt = ctx["prev"], ctx["next"]
         if key == "میں" and (ctx["sent_start"] or prev in _MAIN_PREV or nxt in _MAIN_NEXT):
             return ("मैं", "main", "mai~")
@@ -232,6 +236,27 @@ class NeuralTransliterator:
                 nxt in _PASSIVE_NEXT
                 or (ctx["ne_before"] and (nxt is None or nxt in _PERFECT_NEXT))):
             return ("किया", "kiya", "kiyā")
+        if key == "بن" and nxt in _VERB_NEXT:             # ban gayā / bin (ibn, without)
+            return ("बन", "ban", "ban")
+        if key == "سو" and nxt in _VERB_NEXT:             # so gayā / sau (hundred)
+            return ("सो", "so", "so")
+        if key == "جلد" and (nxt in _JALD_NEXT or nxt in _VERB_NEXT):   # jald hī / jild (volume)
+            return ("जल्द", "jald", "jald")
+        if key == "گر" and (nxt in _VERB_NEXT or nxt in _FALL_NEXT):    # gir gayā / gar (if)
+            return ("गिर", "gir", "gir")
+        if key == "کل":                                   # kul ābādī (total) / kal (day)
+            if nxt in _KUL_NEXT:
+                return ("कुल", "kul", "kul")
+            return ("कल", "kal", "kal")
+        return None
+
+    def _curated(self, key: str):
+        """-> (devanagari, plain, R-or-None) or None. R is None when it still
+        has to come from the model."""
+        folded = _rule._fold_key(key)
+        if folded not in _rule.COMMON_WORDS:
+            return None
+        deva, plain = _rule.COMMON_WORDS[folded]
         rich = CURATED_R.get(key)
         if rich is None:
             lex = self.lexicon.get(key)
@@ -240,26 +265,80 @@ class NeuralTransliterator:
         return deva, plain, rich
 
     def _article(self, key: str, after_word: bool):
-        """ال + a word we know exactly -> (devanagari, None, R, None), with the
+        """ال + a word we know exactly -> (devanagari, plain, rekhta), with the
         article assimilated to a sun letter; "ul" after another word
-        (bain ul-aqvāmī, dār ul-hukūmat), "al" at the start of a phrase."""
+        (bain ul-aqvāmī, dār ul-hukūmat), "al" at the start of a phrase.
+        Devanagari is None when the lexicon has none for the word."""
         if not key.startswith("ال") or len(key) < 4:
             return None
         rest = key[2:]
-        lex = self.lexicon.get(rest) or (EXTRA.get(rest)[1::-1] if rest in EXTRA else None)
-        if not lex or not lex[1]:
-            return None
-        deva, rich = lex[0], lex[1]
-        first = rich.lstrip("'")[:1]
-        cons = first if rest[0] in _SUN_LETTERS and first in _ART_DEVA else "l"
-        vowel = "u" if after_word else "a"
-        prefix_d = ("उ" if after_word else "अ") + _ART_DEVA[cons] + "-"
-        return (prefix_d + deva if deva else None), None, f"{vowel}{cons}-{rich}", None
+        if rest in self.exact:
+            deva, plain, dia = self.exact[rest]
+        else:
+            lex = self.lexicon.get(rest)
+            if not lex or not lex[1]:
+                return None
+            deva, plain, dia = lex[0], to_plain(lex[1]), to_rekhta(lex[1])
+        cons, cons_d = _ART_CONS.get(rest[0], ("l", "ल"))
+        vowel, vowel_d = ("u", "उ") if after_word else ("a", "अ")
+        return ((vowel_d + cons_d + "-" + deva) if deva else None,
+                f"{vowel}{cons}-{plain}", f"{vowel}{cons}-{dia}")
+
+    @staticmethod
+    def _article_after_word(entry: tuple[str, str, str]) -> tuple[str, str, str]:
+        """A dictionary reading that is itself an article form (ad-dīn,
+        as-salām) takes "u" after another word: nasīr ud-dīn."""
+        deva, plain, dia = entry
+        if not _ART_READING.match(plain):
+            return entry
+        return ("उ" + deva[1:] if deva.startswith("अ") else deva, "u" + plain[1:],
+                "u" + dia[1:] if dia.startswith("a") else dia)
 
     # -- public -------------------------------------------------------------------
 
+    def analyze(self, words: list[str]) -> list[tuple[str, str, str | None, str]]:
+        """Per standalone word -> (devanagari, plain, R-or-None, rekhta), no
+        sentence context. Used to draft the exact dictionary for review."""
+        _, keys, plan = self._resolve("\n".join(words), context=False)
+        out = []
+        for i, p in sorted(plan.items()):
+            dia = p[4] or (to_rekhta(p[2]) if p[2] else _rule.transliterate_word(
+                _rule._fold_key(keys[i][1]), style="diacritic")[1])
+            out.append((p[0], p[1], p[2], dia))
+        return out
+
     def transliterate(self, text: str) -> tuple[str, str, str]:
         """-> (devanagari, roman_plain, roman_diacritic)."""
+        parts, keys, plan = self._resolve(text)
+        deva_out, plain_out, dia_out = [], [], []
+        for i, part in enumerate(parts):
+            if i not in keys:
+                deva_out.append(part)
+                plain_out.append(part)
+                dia_out.append(part)
+                continue
+            prefix, key, voc, suffix = keys[i]
+            if key == "و" and 0 < i < len(parts) - 1 and not prefix and not suffix:
+                d = pl = dia = _O
+            else:
+                d, pl, rich, _, dia = plan[i]
+                if dia is None:
+                    dia = to_rekhta(rich) if rich else _rule.transliterate_word(
+                        _rule._fold_key(key), style="diacritic")[1]
+                # izafat written with a zer / hamza: dil-e-nādāñ, ḳhāna-e-dil
+                if voc.endswith(_ZER) or key.endswith("ۂ") or key.endswith("ٔ"):
+                    if not suffix:
+                        d, pl, dia = d + _IZAFAT, pl + _IZAFAT, dia + _IZAFAT
+            deva_out.append(_rule._render_punct(prefix, True) + d + _rule._render_punct(suffix, True))
+            plain_out.append(_rule._render_punct(prefix, False) + pl + _rule._render_punct(suffix, False))
+            dia_out.append(_rule._render_punct(prefix, False) + dia + _rule._render_punct(suffix, False))
+        return (_join("".join(deva_out), "ओ", "ए"), _join("".join(plain_out), "o", "e"),
+                _join("".join(dia_out), "o", "e"))
+
+    def _resolve(self, text: str, context: bool = True):
+        """Tokenise ``text`` and pick every Urdu word's reading -> (parts,
+        keys, plan) where plan[idx] = [devanagari, plain, R, None, rekhta];
+        rekhta is None when it is rendered from R."""
         text = unicodedata.normalize("NFC", text)
         text = re.sub(r"[^\S\n]+", " ", text)
         text = re.sub(r" *\n *", "\n", text).strip()
@@ -272,7 +351,8 @@ class NeuralTransliterator:
             keys[i] = (prefix, norm_urdu(core), norm_urdu(core, keep_harakat=True), suffix)
 
         # pass 1: decide each word's tier; collect what the model must fill
-        plan: dict[int, list] = {}     # idx -> [deva, plain, R, model_src]
+        plan: dict[int, list] = {}     # idx -> [deva, plain, R, model_src, rekhta]
+        done: set[int] = set()         # final already (context rule / dictionary)
         ne_before = False
         for n, i in enumerate(order):
             prefix, key, voc, suffix = keys[i]
@@ -291,16 +371,25 @@ class NeuralTransliterator:
             if key == "نے":
                 ne_before = True
             if not key:
-                plan[i] = ["", "", "", None]
+                plan[i] = ["", "", "", None, ""]
+                done.add(i)
                 continue
             src = voc if voc != key else key      # written harakat help the model
-            cur = self._curated(key, ctx)
-            if cur:
-                plan[i] = [cur[0], cur[1], cur[2], src if cur[2] is None else None]
+            hit = self._context(key, ctx) if context else None
+            if hit:
+                plan[i] = [hit[0], hit[1], hit[2], None, None]
+                done.add(i)
                 continue
-            if key in EXTRA:
-                r_, d_, pl_ = EXTRA[key]
-                plan[i] = [d_, pl_, r_, None]
+            if key in self.exact:
+                entry = self.exact[key]
+                if not sent_start and key.startswith("ال"):
+                    entry = self._article_after_word(entry)
+                plan[i] = [entry[0], entry[1], None, None, entry[2]]
+                done.add(i)
+                continue
+            cur = self._curated(key)
+            if cur:
+                plan[i] = [cur[0], cur[1], cur[2], src if cur[2] is None else None, None]
                 continue
             lex = self.lexicon.get(key)
             # after another word, ال is the Arabic construct (dār ul-hukūmat) even
@@ -309,11 +398,13 @@ class NeuralTransliterator:
             art = (self._article(key, after_word=not sent_start)
                    if (not lex or not sent_start) else None)
             if art:
-                plan[i] = list(art)
+                plan[i] = [art[0], art[1], None, None, art[2]]
+                if art[0]:
+                    done.add(i)
             elif lex:
-                plan[i] = [lex[0], None, lex[1], None]
+                plan[i] = [lex[0], None, lex[1], None, None]
             else:
-                plan[i] = [None, None, None, src]
+                plan[i] = [None, None, None, src, None]
 
         src_key = {p[3]: keys[i][1] for i, p in plan.items() if p[3]}
         joint = self._joint(list(src_key), src_key)
@@ -322,10 +413,10 @@ class NeuralTransliterator:
 
         # pass 2: fill from the model (or the rule engine as last resort)
         for i, p in plan.items():
-            key = keys[i][1]
-            if not key:
+            if i in done:
                 continue
-            deva, plain, rich, src = p
+            key = keys[i][1]
+            deva, plain, rich, src, dia = p
             if src:
                 hit = joint.get(src)
                 if plain is not None:           # curated: model supplies only R
@@ -340,38 +431,16 @@ class NeuralTransliterator:
                 deva = deva_of.get(rich)
             if rich:
                 rich = _mukhtafi(key, rich)
-            if rich is None or deva is None:
+            if (rich is None and dia is None) or deva is None:
                 rd, rp = _rule.transliterate_word(_rule._fold_key(key))
                 deva = deva or rd
                 if rich is None:
                     plain = plain or rp
             if plain is None and key in self.english:
                 plain = self.english[key]
-            p[:] = [deva, plain if plain is not None else (to_plain(rich) if rich else ""), rich, None]
-
-        deva_out, plain_out, dia_out = [], [], []
-        for i, part in enumerate(parts):
-            if i not in keys:
-                deva_out.append(part)
-                plain_out.append(part)
-                dia_out.append(part)
-                continue
-            prefix, key, voc, suffix = keys[i]
-            if key == "و" and 0 < i < len(parts) - 1 and not prefix and not suffix:
-                d = pl = dia = _O
-            else:
-                d, pl, rich, _ = plan[i]
-                dia = to_rekhta(rich) if rich else _rule.transliterate_word(
-                    _rule._fold_key(key), style="diacritic")[1]
-                # izafat written with a zer / hamza: dil-e-nādāñ, ḳhāna-e-dil
-                if voc.endswith(_ZER) or key.endswith("ۂ") or key.endswith("ٔ"):
-                    if not suffix:
-                        d, pl, dia = d + _IZAFAT, pl + _IZAFAT, dia + _IZAFAT
-            deva_out.append(_rule._render_punct(prefix, True) + d + _rule._render_punct(suffix, True))
-            plain_out.append(_rule._render_punct(prefix, False) + pl + _rule._render_punct(suffix, False))
-            dia_out.append(_rule._render_punct(prefix, False) + dia + _rule._render_punct(suffix, False))
-        return (_join("".join(deva_out), "ओ", "ए"), _join("".join(plain_out), "o", "e"),
-                _join("".join(dia_out), "o", "e"))
+            p[:] = [deva, plain if plain is not None else (to_plain(rich) if rich else ""),
+                    rich, None, dia]
+        return parts, keys, plan
 
 
 # ---------------------------------------------------------------------------

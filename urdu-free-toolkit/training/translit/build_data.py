@@ -343,7 +343,28 @@ def english_layer(votes, casual_rows) -> dict[str, str]:
         top, w = c.most_common(1)[0]
         if len(top) >= 5 and top in vocab and w / sum(c.values()) >= 0.6 and w >= 3:
             out[u] = top
+    for u in ENGLISH_NOT:
+        out.pop(u, None)
+    out.update(ENGLISH_FIX)
     return out
+
+
+# Hand review of the English layer: spellings that are ordinary Urdu words
+# (کافی kaafi "enough", not coffee; چلی chali, not Chile; کیف kaif, جگ jag,
+# لیل lail) or whose Urdu name isn't the English one (اردن urdun, رمضان ramzan)
+# keep their phonetic reading.
+ENGLISH_NOT = set(
+    "ہند ہندوستان عربی ہسپانیہ اطالیہ المانیہ ولندیز برطانیہ انگلستان روس آئرستان "
+    "ارمنستان متھن ابراہیم جبرائیل میکائیل یشوع ہوسیع ہوشیع یہوداہ تورات گنگا فرات "
+    "قاہرہ اسکندریہ صقلیہ انطاکیہ رام کشن گنیش شیو بور پال کیلے لیل لیون سلینڈر سلاپ "
+    "وندر کبل شکی مرو کولن گلیل کملا پتلون بوچڑ اردلی ماچس بکس جگ درجن افسر کافی کوفی "
+    "کیف عمان ارسطو رمضان گنی چلی فٹ نیٹرون انترم ٹماٹر اردن فلسطین دمشق ہندومت "
+    "مورمنیت غرناطہ کنعان".split())
+ENGLISH_FIX = {
+    "کیفے": "cafe", "نوبل": "nobel", "پوپ": "pope", "سلیمان": "sulaiman",
+    "مہابھارت": "mahabharat", "رامائن": "ramayan", "مہایان": "mahayan", "رگوید": "rigved",
+    "دریودھن": "duryodhan", "ہمالیہ": "himalaya", "چیت": "chait",
+}
 
 
 def main(argv=None):

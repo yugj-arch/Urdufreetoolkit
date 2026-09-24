@@ -332,6 +332,8 @@ def _plain_vowels(run: str, final: bool, mono: bool) -> str:
 def _render_word(word: str, style: str) -> str:
     if not word:
         return word
+    if style == "plain" and word == "ā":     # آ on its own: aa gaya, aa kar
+        return "aa"
     units = _units(word)
     n_vowel_runs = sum(1 for u in units if _is_vowel_unit(u))
     mono = n_vowel_runs <= 1
@@ -359,8 +361,14 @@ def _render_word(word: str, style: str) -> str:
                 continue
             out.append("'")
             continue
+        if (style == "plain" and u == "v" and final and k > 0
+                and _is_vowel_unit(units[k - 1])):
+            out.append("v")                     # word-final: dev, shiv, dabaav -- not dew
+            continue
         table = _PLAIN_CONS if style == "plain" else _REKHTA_CONS
         out.append(table.get(u, u))
+    if style == "plain":            # a dropped ain can butt vowels: jamā'at -> jamaat
+        return re.sub(r"([aeiou])\1{2,}", r"\1\1", "".join(out))
     return "".join(out)
 
 

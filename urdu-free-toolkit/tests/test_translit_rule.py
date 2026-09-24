@@ -145,8 +145,11 @@ def test_roman_medial_schwa_is_deleted():
     assert roman == "chamakte"
 
 
-def test_roman_first_syllable_schwa_is_kept():
-    # نکلتے: the ن–ک schwa stays, only the ل–ت one drops -> "nakalte"
+def test_roman_first_syllable_schwa_is_kept(monkeypatch):
+    # نکلتے: the ن–ک schwa stays, only the ل–ت one drops -> "nakalte".
+    # The exact dictionary knows the real word (nikalte), so bypass it to
+    # exercise the character fallback itself.
+    monkeypatch.setattr(rule_engine, "_EXACT", {})
     _, roman = rule_engine.transliterate("نکلتے")
     assert roman == "nakalte"
 

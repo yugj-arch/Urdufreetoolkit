@@ -11,6 +11,12 @@
     python -m training.translit.evaluate --systems rule,neural,gpt --words 500 --sents 120
     (any of gpt / claude / gemini / groq, whichever has a key in .env)
 
+    python -m training.translit.evaluate --systems neural,neural+dict --words 0 --sents 0
+    ("+dict" = with the exact dictionary data/translit_dictionary.tsv; 0 = the
+    whole held-out set. Held-out Wiktionary words are removed from the
+    dictionary for the word benchmark, so no system is scored on a word whose
+    reading it was handed.)
+
 Writes data/translit_model/benchmark.json and prints a table.
 """
 from __future__ import annotations
@@ -55,19 +61,39 @@ def levenshtein(a: str, b: str) -> int:
 # systems: each maps list[str] (lines of Urdu) -> list[(deva, plain)] or None
 # ---------------------------------------------------------------------------
 
-def sys_rule():
+def sys_rule(exact: dict | None):
+    """The rule engine, with the exact dictionary swapped for ``exact``
+    ({} = without it)."""
     import transliterate
-    return lambda lines: [transliterate.transliterate(l) for l in lines]
+
+    def run(lines):
+        saved = transliterate._EXACT
+        transliterate._EXACT = {transliterate._fold_key(k): v for k, v in (exact or {}).items()}
+        try:
+            return [transliterate.transliterate(l) for l in lines]
+        finally:
+            transliterate._EXACT = saved
+    return run
 
 
-def sys_neural(lexicon: Path, evidence: Path | None, ev_weight: float):
+def sys_neural(lexicon: Path, evidence: Path | None, ev_weight: float, exact: dict | None):
     from neural_translit import NeuralTransliterator
     eng = NeuralTransliterator(lexicon_path=lexicon, evidence_path=evidence,
                                english_path=None if evidence is None else DS / "english_train.json",
-                               evidence_weight=ev_weight)
+                               dictionary_path=None, evidence_weight=ev_weight)
+    eng.exact = dict(exact or {})
     print(f"  neural: model={'yes' if eng.has_model else 'NO'} lexicon={len(eng.lexicon)} "
-          f"evidence={len(eng.evidence)} weight={ev_weight}", flush=True)
+          f"evidence={len(eng.evidence)} weight={ev_weight} dictionary={len(eng.exact)}",
+          flush=True)
     return lambda lines: [eng.transliterate(l)[:2] for l in lines]
+
+
+def with_dictionary(fn_for, exact_all: dict, held: set[str]):
+    """A system factory run with the dictionary minus held-out gold words:
+    words are scored without them, sentences with the whole dictionary."""
+    exact_words = {k: v for k, v in exact_all.items() if k not in held}
+    fw, fs = fn_for(exact_words), fn_for(exact_all)
+    return fw, fs
 
 
 def sys_llm(provider_id: str):
@@ -184,8 +210,8 @@ def eval_sents(fn, sents):
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--systems", default="rule,neural")
-    ap.add_argument("--words", type=int, default=500)
-    ap.add_argument("--sents", type=int, default=120)
+    ap.add_argument("--words", type=int, default=500, help="0 = all held-out words")
+    ap.add_argument("--sents", type=int, default=120, help="0 = all test sentences")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--sent-split", default="test", choices=["dev", "test"],
                     help="Dakshina split for sentences (tune on dev, report on test)")
@@ -195,33 +221,50 @@ def main(argv=None):
     rng = random.Random(args.seed)
 
     words = [json.loads(l) for l in (DS / "test.jsonl").read_text(encoding="utf-8").splitlines()]
+    held = {w["urdu"] for w in words}
     rng.shuffle(words)
-    words = words[: args.words]
+    words = words[: args.words or None]
     nat = (DAK / f"ur.romanized.rejoined.{args.sent_split}.native.txt").read_text(encoding="utf-8").splitlines()
     rom = (DAK / f"ur.romanized.rejoined.{args.sent_split}.roman.txt").read_text(encoding="utf-8").splitlines()
     pairs = [(n, r) for n, r in zip(nat, rom) if 4 <= len(n.split()) <= 30]
     rng.shuffle(pairs)
-    sents = pairs[: args.sents]
+    sents = pairs[: args.sents or None]
 
     lex_train = DS / "lexicon_train.json.gz"
     with gzip.open(lex_train, "wt", encoding="utf-8") as fh:
         json.dump(json.loads((DS / "lexicon_train.json").read_text(encoding="utf-8")), fh,
                   ensure_ascii=False)
 
+    from urdu_nn.scheme import norm_urdu
+    from transliterate import load_exact_dictionary
+    exact_all = {norm_urdu(k): v for k, v in load_exact_dictionary().items()}
+    ev = None if args.no_evidence else DS / "evidence_train.json.gz"
+
     results = {}
     for name in args.systems.split(","):
         t0 = time.time()
         print(f"== {name}", flush=True)
-        if name == "rule":
-            fn, label = sys_rule(), "rule engine (offline)"
-        elif name == "neural":
-            ev = None if args.no_evidence else DS / "evidence_train.json.gz"
-            fn, label = sys_neural(lex_train, ev, args.ev_weight), "neural (offline)"
+        base, dict_on = name.removesuffix("+dict"), name.endswith("+dict")
+        if base == "rule":
+            fn_for, label = sys_rule, "rule engine (offline)"
+        elif base == "neural":
+            fn_for = lambda ex: sys_neural(lex_train, ev, args.ev_weight, ex)  # noqa: E731
+            label = "neural (offline)"
         elif name in _COMMON:
             fn, label = sys_llm(name)
+            fn_for = None
         else:
             raise SystemExit(f"unknown system {name}")
-        res = {"label": label, "words": eval_words(fn, words), "sents": eval_sents(fn, sents)}
+        if fn_for is None:
+            fw = fs = fn
+        elif dict_on:
+            if not exact_all:
+                raise SystemExit("no data/translit_dictionary.tsv -- build it first")
+            fw, fs = with_dictionary(fn_for, exact_all, held)
+            label += f" + exact dictionary ({len(exact_all):,} words)"
+        else:
+            fw = fs = fn_for({})
+        res = {"label": label, "words": eval_words(fw, words), "sents": eval_sents(fs, sents)}
         res["seconds"] = round(time.time() - t0, 1)
         results[name] = res
         w, s = res["words"], res["sents"]

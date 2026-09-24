@@ -188,3 +188,42 @@ output was used as training data -- every label is human-authored.
 `lexicon.json.gz` (Urdu spelling -> [Devanagari, R-reading]) and the model
 weights are derived works of the above and are offered under CC BY-SA 4.0.
 Rekhta or any other copyrighted poetry site was NOT used.
+
+---
+
+# data/translit_dictionary.tsv -- the exact dictionary (10,000 words)
+
+## What it is
+
+The 10,000 most frequent Urdu word forms, by token count over the Dakshina
+Urdu Wikipedia training text (Google Research, CC BY-SA 4.0), which together
+cover about 92% of running Urdu text. Each row: urdu, Devanagari, plain Roman,
+Rekhta-style Roman.
+
+## How the spellings were made
+
+1. Draft readings came from the offline engines' own tables: the curated
+   `COMMON_WORDS`, the Wiktionary gold lexicon (`data/translit_model/`, see
+   above), then the trained neural model for the rest.
+2. Every one of the 10,000 drafts was then reviewed, word by word, by Claude
+   (Anthropic's AI assistant) in a Claude Code session on 2026-09-24. This is
+   model review, not a human linguist's: treat the corrections as strong but
+   fallible, and fix any you find wrong. 1,960 were corrected, and each
+   correction is recorded in
+   `training/translit/dictionary_fixes.txt`. Typical errors fixed: wrong
+   Devanagari on gold-lexicon rows (عام → आम, not वाम; کرتا → करता, not कर्ता),
+   the silent final ہ written as "-ah" (دوبارہ → dobaara), ۃ taa marbuta leaking
+   into the output (زکوٰۃ → zakaat), English loans and names (یونیورسٹی →
+   university), and Arabic article compounds (الاقوامی → al-aqvāmī / ul- after
+   a word).
+3. No paid API was called. Apart from those reviewed corrections, every
+   spelling comes from the free, human-authored sources above.
+
+## How to re-run / extend
+
+```bash
+python -m training.translit.build_dictionary draft --words 10000
+python -m training.translit.build_dictionary build
+```
+
+Add or edit lines in `dictionary_fixes.txt` and rebuild. Never hand-edit the TSV.
