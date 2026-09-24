@@ -401,6 +401,18 @@ def fold_roman(s: str) -> str:
     return s
 
 
+_HALF_NASAL_D = re.compile("[ङञणनम]्(?=[क-ह])")
+
+
+def hindi_fold(deva: str) -> str:
+    """Comparison key for two Devanagari spellings of one word: blind to
+    nukta, nasal notation and virama (कुर्सियाँ = कुरसियां, सम्बन्ध = संबंध).
+    Keys the Hindi-word table the runtime reranks the model's beam with."""
+    s = unicodedata.normalize("NFC", deva).replace("़", "").replace("ँ", "ं")
+    s = _HALF_NASAL_D.sub("ं", s.replace("‍", "").replace("‌", ""))
+    return s.replace("्", "")
+
+
 # ---------------------------------------------------------------------------
 # Devanagari -> Urdu spelling candidates (data building only)
 # ---------------------------------------------------------------------------
@@ -553,3 +565,146 @@ def deva_to_urdu_candidates(deva: str, limit: int = 96) -> list[str]:
                     if len(out) >= limit:
                         return out
     return out
+
+
+# ---------------------------------------------------------------------------
+# Devanagari -> R readings (data building only)
+# ---------------------------------------------------------------------------
+
+_R_CONS = {
+    "क": "k", "ख": "kh", "ग": "g", "घ": "gh", "ङ": "ṅ", "च": "c", "छ": "ch", "ज": "j",
+    "झ": "jh", "ञ": "ñ", "ट": "ṭ", "ठ": "ṭh", "ड": "ḍ", "ढ": "ḍh", "ण": "ṇ", "त": "t",
+    "थ": "th", "द": "d", "ध": "dh", "न": "n", "प": "p", "फ": "ph", "ब": "b", "भ": "bh",
+    "म": "m", "य": "y", "र": "r", "ल": "l", "व": "v", "श": "ś", "ष": "ṣ", "स": "s", "ह": "h",
+}
+_R_NUKTA = {"क": "q", "ख": "x", "ग": "ġ", "ज": "z", "झ": "ž", "फ": "f", "ड": "ṛ", "ढ": "ṛh",
+            "य": "y"}
+_R_INDEP = {"अ": "a", "आ": "ā", "इ": "i", "ई": "ī", "उ": "u", "ऊ": "ū", "ए": "e", "ऐ": "ai",
+            "ओ": "o", "औ": "au", "ऋ": "ri", "ऑ": "o", "ऍ": "e"}
+_R_MATRA = {"ा": "ā", "ि": "i", "ी": "ī", "ु": "u", "ू": "ū", "े": "e", "ै": "ai", "ो": "o",
+            "ौ": "au", "ृ": "ri", "ॉ": "o", "ॅ": "e"}
+
+
+def _anusvara_before(cons: str) -> str:
+    """R for an anusvara followed by consonant ``cons`` (homorganic nasal;
+    a nasal vowel ``~`` before semivowels, as Hindi Wiktionary writes them)."""
+    c = cons[:1]
+    if c in "kgqxġ":
+        return "ṅ"
+    if c in "cjś":
+        return "ñ"
+    if c in "ṭḍṛ":
+        return "ṇ"
+    if c in "pbm":
+        return "m"
+    if c in "yrlv":
+        return "~"
+    return "n"
+
+
+def deva_to_rich_candidates(deva: str, limit: int = 16) -> list[str]:
+    """Plausible R readings of one Devanagari word, most likely first.
+
+    Devanagari spells every vowel except the inherent schwa, so the only real
+    ambiguity is which schwas are silent. The first candidate follows the
+    standard Hindi schwa-deletion rule (right to left, delete in V C _ C V;
+    word-final schwa silent); the rest flip one, two, ... of the deletable
+    schwas, so a caller holding human romanisations (adaalaton vs adaalton)
+    can pick the one people actually say. Empty list if the word has
+    anything this mapper doesn't model."""
+    deva = unicodedata.normalize("NFC", deva.strip()).replace("ज्ञ", "ग्य")
+    if not deva or " " in deva:
+        return []
+    # items: [kind, r] with kind C (consonant), V (vowel), S (schwa slot),
+    # F (schwa slot that is always pronounced), N (anusvara), M (candrabindu)
+    items: list[list[str]] = []
+    i, n = 0, len(deva)
+    while i < n:
+        ch = deva[i]
+        if ch in _R_CONS:
+            r = _R_CONS[ch]
+            if i + 1 < n and deva[i + 1] == _NUKTA:
+                r = _R_NUKTA.get(ch, r)
+                i += 1
+            items.append(["C", r])
+            nx = deva[i + 1] if i + 1 < n else ""
+            if nx in _R_MATRA:
+                items.append(["V", _R_MATRA[nx]])
+                i += 2
+                continue
+            if nx == _VIRAMA:
+                i += 2
+                continue
+            items.append(["S", "a"])
+            i += 1
+            continue
+        if ch in _R_INDEP:
+            if items and items[-1][0] == "S":
+                items[-1][0] = "F"          # kaī, gae: the schwa is heard before a vowel letter
+            items.append(["V", _R_INDEP[ch]])
+        elif ch in (_ANUSVARA, _CANDRABINDU):
+            if items and items[-1][0] == "S":
+                items[-1][0] = "F"          # hans, ha~s: a nasalised schwa is heard
+            items.append(["N" if ch == _ANUSVARA else "M", ""])
+        elif ch == _VISARGA:
+            items.append(["C", "h"])
+        else:
+            return []
+        i += 1
+    if not any(k in ("V", "S", "F") for k, _ in items):
+        return []
+
+    # the first syllable's schwa is always heard (kar-nā, pra-kār)
+    for k, it in enumerate(items):
+        if it[0] in ("V", "F"):
+            break
+        if it[0] == "S":
+            it[0] = "F"
+            break
+    slots = [k for k, it in enumerate(items) if it[0] == "S"]
+    last = max((k for k, it in enumerate(items) if it[0] not in ("N", "M")), default=-1)
+
+    def is_vowel(k, keep):
+        return 0 <= k < len(items) and (items[k][0] in ("V", "F")
+                                          or (items[k][0] == "S" and keep.get(k, True)))
+
+    # default: final schwa silent, then Ohala's right-to-left V C _ C V rule
+    keep: dict[int, bool] = {}
+    for k in reversed(slots):
+        if k == last:
+            keep[k] = False
+            continue
+        vc = (k >= 2 and items[k - 1][0] == "C" and is_vowel(k - 2, keep))
+        cv = (k + 2 < len(items) and items[k + 1][0] == "C" and is_vowel(k + 2, keep))
+        keep[k] = not (vc and cv)
+    # the final schwa is only really optional after a cluster (vrikṣ ~ svapna)
+    free = [k for k in slots if k != last
+            or (k >= 2 and items[k - 1][0] == "C" and items[k - 2][0] == "C")]
+
+    def render(kp):
+        out = []
+        for k, (kind, r) in enumerate(items):
+            if kind in ("C", "V", "F"):
+                out.append(r)
+            elif kind == "S":
+                out.append("a" if kp[k] else "")
+            elif kind == "M":   # candrabindu: nasal vowel, but a velar nasal before k/g
+                nxt = items[k + 1] if k + 1 < len(items) else None
+                out.append("ṅ" if nxt and nxt[0] == "C" and nxt[1][:1] in "kgqxġ" else "~")
+            else:   # anusvara: homorganic nasal before a consonant, else nasal vowel
+                nxt = items[k + 1] if k + 1 < len(items) else None
+                out.append(_anusvara_before(nxt[1]) if nxt and nxt[0] == "C" else "~")
+        return "".join(out)
+
+    cands: list[str] = []
+    for depth in range(len(free) + 1):
+        for flip in itertools.combinations(free, depth):
+            kp = dict(keep)
+            for k in flip:
+                kp[k] = not kp[k]
+            s = render(kp)
+            if s not in cands:
+                cands.append(s)
+                if len(cands) >= limit:
+                    return cands
+    return cands

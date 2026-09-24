@@ -30,7 +30,10 @@ OUT = ROOT / "data" / "translit_model"
 
 def load(split):
     rows = []
-    for line in (DS / f"{split}.tsv").read_text(encoding="utf-8").splitlines():
+    path = DS / f"{split}.tsv"
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8").splitlines():
         t, s, g, w = line.split("\t")
         rows.append((t, s, g, float(w)))
     return rows
@@ -44,12 +47,14 @@ def build_vocab(rows) -> Vocab:
     return Vocab(sorted(chars))
 
 
-def epoch_mix(train, rng, casual_per_epoch, main_repeat, hindi_per_epoch=40_000):
+def epoch_mix(train, rng, casual_per_epoch, main_repeat, hindi_per_epoch=40_000,
+              silver=(), silver_per_epoch=0):
     main = [r for r in train if r[0] in "jr"]
     casual = [r for r in train if r[0] == "c"]
     hindi = [r for r in train if r[0] == "h"]
     mix = (main * main_repeat + rng.sample(casual, min(casual_per_epoch, len(casual)))
-           + rng.sample(hindi, min(hindi_per_epoch, len(hindi))))
+           + rng.sample(hindi, min(hindi_per_epoch, len(hindi)))
+           + rng.sample(list(silver), min(silver_per_epoch, len(silver))))
     rng.shuffle(mix)
     return mix
 
@@ -106,6 +111,12 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--resume", action="store_true",
                     help="start from data/translit_model/model.pt (fresh optimizer)")
+    ap.add_argument("--init", type=Path, default=None,
+                    help="start from this checkpoint instead (its size wins over --d-model/--layers)")
+    ap.add_argument("--out", type=Path, default=OUT,
+                    help="where checkpoints and the final model.pt go (default: the shipped model dir)")
+    ap.add_argument("--silver-per-epoch", type=int, default=-1,
+                    help="silver.tsv rows sampled per epoch (-1 = all, 0 = none)")
     ap.add_argument("--warmup", type=int, default=2000)
     ap.add_argument("--label-smoothing", type=float, default=0.1,
                     help="cross-entropy label smoothing (use 0.01-0.03 for final exact-match fine-tuning)")
@@ -116,29 +127,39 @@ def main(argv=None):
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    train, dev = load("train"), load("dev")
-    vocab = build_vocab(train + dev)
-    resume = torch.load(OUT / "model.pt", map_location="cpu") if args.resume else None
+    train, dev, silver = load("train"), load("dev"), load("silver")
+    if args.silver_per_epoch < 0:
+        args.silver_per_epoch = len(silver)
+    if not args.silver_per_epoch:
+        silver = []
+    vocab = build_vocab(train + dev + silver)
+    init = args.init or (OUT / "model.pt" if args.resume else None)
+    resume = torch.load(init, map_location="cpu") if init else None
     if resume:
         vocab.itos = resume["itos"]
         vocab.stoi = {c: i for i, c in enumerate(vocab.itos)}
-    print(f"device={device} train={len(train)} dev={len(dev)} vocab={len(vocab)}", flush=True)
+    print(f"device={device} train={len(train)} silver={len(silver)} dev={len(dev)} "
+          f"vocab={len(vocab)}", flush=True)
 
-    model = Seq2Seq(len(vocab), d_model=args.d_model, enc_layers=args.layers,
-                    dec_layers=args.layers, ff=args.d_model * 4).to(device)
+    if resume:
+        model = Seq2Seq(**resume["cfg"]).to(device)
+    else:
+        model = Seq2Seq(len(vocab), d_model=args.d_model, enc_layers=args.layers,
+                        dec_layers=args.layers, ff=args.d_model * 4).to(device)
     if resume:
         model.load_state_dict({k: v.float() for k, v in resume["state"].items()})
         print(f"resumed from epoch {resume['epoch']} dev {resume['dev']}", flush=True)
     print(f"params={sum(p.numel() for p in model.parameters()) / 1e6:.2f}M", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.98), weight_decay=0.01)
     steps_per_epoch = math.ceil((sum(1 for r in train if r[0] in "jr") * args.main_repeat
-                                 + args.casual_per_epoch + 40_000) / args.bs)
+                                 + args.casual_per_epoch + 40_000 + args.silver_per_epoch) / args.bs)
     total = steps_per_epoch * args.epochs
     warm = min(args.warmup, total // 10)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1.0, (s + 1) / warm) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / total))))
     use_amp = device == "cuda"
-    OUT.mkdir(parents=True, exist_ok=True)
+    out = args.out
+    out.mkdir(parents=True, exist_ok=True)
     best, step, t0 = -1.0, 0, time.time()
     if resume:   # a resumed run must beat the checkpoint it started from
         best = resume["dev"].get("j", 0)
@@ -146,8 +167,9 @@ def main(argv=None):
     for ep in range(1, args.epochs + 1):
         model.train()
         tot, n = 0.0, 0
-        for src, tgt, w in batches(epoch_mix(train, rng, args.casual_per_epoch, args.main_repeat),
-                                   vocab, args.bs, device):
+        mix = epoch_mix(train, rng, args.casual_per_epoch, args.main_repeat,
+                        silver=silver, silver_per_epoch=args.silver_per_epoch)
+        for src, tgt, w in batches(mix, vocab, args.bs, device):
             try:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
                     logits = model(src, tgt[:, :-1])
@@ -178,16 +200,16 @@ def main(argv=None):
         # select on the joint task only: its dev set is ~5x the others (less noise)
         state = {k: v.detach().clone() for k, v in model.state_dict().items()}
         ck = {"state": state, "cfg": model.cfg, "itos": vocab.itos, "epoch": ep, "dev": acc}
-        torch.save(ck, OUT / "model_last.pt")
+        torch.save(ck, out / "model_last.pt")
         recent = (recent + [state])[-args.avg:]
         if acc.get("j", 0) > best:
             best = acc["j"]
-            torch.save(ck, OUT / "model_best.pt")
+            torch.save(ck, out / "model_best.pt")
 
     # final pick: best epoch vs last epoch vs average of the last N, by beam-4 dev
-    cands = {"last": torch.load(OUT / "model_last.pt", map_location=device)}
-    if (OUT / "model_best.pt").exists():
-        cands["best"] = torch.load(OUT / "model_best.pt", map_location=device)
+    cands = {"last": torch.load(out / "model_last.pt", map_location=device)}
+    if (out / "model_best.pt").exists():
+        cands["best"] = torch.load(out / "model_best.pt", map_location=device)
     if len(recent) > 1:
         avg = {k: (sum(r[k].float() for r in recent) / len(recent)).to(recent[-1][k].dtype)
                for k in recent[-1]}
@@ -202,9 +224,9 @@ def main(argv=None):
     # ship half-precision weights (the runtime upcasts on load): half the size
     ck["state"] = {k: v.half() for k, v in ck["state"].items()}
     ck["dev_beam4"] = scored[pick]
-    torch.save(ck, OUT / "model.pt")
+    torch.save(ck, out / "model.pt")
     print(f"shipped {pick} (epoch {ck['epoch']}) dev(beam4) {scored[pick]}", flush=True)
-    (OUT / "train_log.json").write_text(json.dumps(
+    (out / "train_log.json").write_text(json.dumps(
         {"shipped": pick, "epoch": ck["epoch"], "dev_beam4": scored, "args": vars(args)},
         indent=1, default=str))
 

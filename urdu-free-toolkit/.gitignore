@@ -27,7 +27,9 @@ models/
 !/data/translit_model/lexicon.json.gz
 !/data/translit_model/evidence.json.gz
 !/data/translit_model/english.json
+!/data/translit_model/hindi_forms.json.gz
 !/data/translit_model/benchmark.json
+!/data/translit_model/gpt.json.gz
 # resumability checkpoint/title-cache files: local working state, not shipped data.
 /data/.lexicon_checkpoint.json
 /data/.lexicon_titles.json

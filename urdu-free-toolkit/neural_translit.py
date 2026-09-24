@@ -2,8 +2,14 @@
 """neural_translit.py -- offline, free Urdu -> Devanagari + Roman transliteration
 backed by a trained character-level Transformer (``training/translit/``).
 
-Per word, most-trusted source first:
+A line the GPT column has already read (``data/translit_model/gpt.json.gz``,
+``training/translit/gpt_distill.py``) comes back exactly as GPT wrote it.
+Otherwise, per word, most-trusted source first:
 
+  G. GPT's own reading, distilled from its replies on real poetry and prose:
+     a (prev, word) / (word, next) context reading, else -- after the
+     homograph rules below -- GPT's majority spelling in each script. GPT's
+     joins between known word pairs (hyphens, unwritten izafat -e-) too.
   0. sentence-context rules for the few truly ambiguous words (میں
      main/mein, کیا kyā/kiyā, بن ban/bin, سو so/sau, جلد jald/jild,
      گر gir/gar, کل kul/kal)
@@ -35,6 +41,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 import re
 import threading
 import unicodedata
@@ -43,7 +50,7 @@ from pathlib import Path
 import transliterate as _rule
 import difflib
 
-from urdu_nn.scheme import fold_roman, norm_urdu, to_plain, to_rekhta
+from urdu_nn.scheme import fold_roman, hindi_fold, norm_urdu, to_plain, to_rekhta
 
 MODEL_DIR = Path(__file__).with_name("data") / "translit_model"
 MODEL_PATH = MODEL_DIR / "model.pt"
@@ -51,7 +58,11 @@ LEXICON_PATH = MODEL_DIR / "lexicon.json.gz"
 EVIDENCE_PATH = MODEL_DIR / "evidence.json.gz"
 ENGLISH_PATH = MODEL_DIR / "english.json"
 DICTIONARY_PATH = _rule.EXACT_DICTIONARY_PATH
+GPT_PATH = MODEL_DIR / "gpt.json.gz"
+HINDI_FORMS_PATH = MODEL_DIR / "hindi_forms.json.gz"
 EVIDENCE_WEIGHT = 2.0      # how far human romanisations may pull the beam (tuned on Dakshina dev)
+CASUAL_WEIGHT = 4.0        # ... the model's own casual-Roman beam, for words with none (tuned on gold dev)
+HINDI_BONUS = 2.0          # a beam reading that is a real Hindi word (tuned on gold dev)
 
 # R readings for curated words whose Wiktionary-majority reading is a
 # different word or a different register (Rekhta-style Roman is rendered from
@@ -100,10 +111,33 @@ class NeuralTransliterator:
     def __init__(self, model_path: Path = MODEL_PATH, lexicon_path: Path = LEXICON_PATH,
                  evidence_path: Path = EVIDENCE_PATH, english_path: Path = ENGLISH_PATH,
                  dictionary_path: Path | None = DICTIONARY_PATH,
-                 beam: int = 5, device: str = "cpu", evidence_weight: float = EVIDENCE_WEIGHT):
+                 beam: int = 5, device: str = "cpu", evidence_weight: float = EVIDENCE_WEIGHT,
+                 gpt_path: Path | None = GPT_PATH,
+                 hindi_forms_path: Path | None = HINDI_FORMS_PATH,
+                 casual_weight: float = CASUAL_WEIGHT, hindi_bonus: float = HINDI_BONUS):
         self.beam = beam
         self.device = device
         self.evidence_weight = evidence_weight
+        self.casual_weight = casual_weight
+        self.hindi_bonus = hindi_bonus
+        # urdu -> Hindi words that spell it (hindi_fold keys), for beam reranking
+        self.hindi_forms: dict[str, set[str]] = {}
+        if hindi_forms_path and Path(hindi_forms_path).exists():
+            with gzip.open(hindi_forms_path, "rt", encoding="utf-8") as fh:
+                self.hindi_forms = {k: set(v) for k, v in json.load(fh).items()}
+        # GPT column, distilled: verbatim lines, per-script word readings,
+        # context readings ("L\tprev\tw" / "R\tw\tnext") and pair joins
+        gpt = {}
+        if gpt_path and Path(gpt_path).exists():
+            with gzip.open(gpt_path, "rt", encoding="utf-8") as fh:
+                gpt = json.load(fh)
+        self.gpt_lines: dict[str, list[str]] = gpt.get("lines", {})
+        self.gpt_words: dict[str, list[str | None]] = gpt.get("words", {})
+        self.gpt_ctx: dict[str, list[str | None]] = gpt.get("ctx", {})
+        self.gpt_joins: dict[str, list[str | None]] = gpt.get("joins", {})
+        self.gpt_merge: dict[str, list[str | None]] = gpt.get("merge", {})
+        self.gpt_future: dict[str, list[float]] = gpt.get("future_merge", {})
+        self.gpt_o_join: list[str] = gpt.get("o_join", ["-", "-", "-"])
         # reviewed words: urdu -> (devanagari, plain, rekhta), used verbatim
         self.exact: dict[str, tuple[str, str, str]] = {
             norm_urdu(k): v for k, v in _rule.load_exact_dictionary(dictionary_path).items()}
@@ -178,15 +212,54 @@ class NeuralTransliterator:
 
     def _joint(self, words: list[str], keys: dict[str, str]) -> dict[str, tuple[str, str]]:
         """urdu -> (R, devanagari); ``keys`` maps a model source (which may
-        carry harakat) to its plain lookup key for the evidence table."""
+        carry harakat) to its plain lookup key for the evidence tables."""
         def ok(t):
             return t.count("|") == 1 and all(t.split("|"))
+        beams = self._decode("j", words, ok)
+        # a word nobody's romanisation covers: the model's own casual-Roman
+        # beam (learnt from 700k human romanisations) stands in for them
+        bare = [w for w, h in beams.items() if len(h) > 1 and not self.evidence.get(keys.get(w, w))]
+        casual = (self._decode("c", bare, lambda t: bool(t) and "|" not in t)
+                  if bare and self.casual_weight else {})
         res = {}
-        for w, hyps in self._decode("j", words, ok).items():
-            ev = self.evidence.get(keys.get(w, w))
-            best = self._evidence_pick(hyps, ev) if ev and len(hyps) > 1 else hyps[0][0]
+        for w, hyps in beams.items():
+            key = keys.get(w, w)
+            best = hyps[0][0] if len(hyps) == 1 else self._rerank(
+                hyps, self.evidence.get(key), casual.get(w), self.hindi_forms.get(key))
             res[w] = tuple(best.split("|"))
         return res
+
+    def _rerank(self, hyps: list[tuple[str, float]], ev: dict[str, float] | None,
+                casual: list[tuple[str, float]] | None, hindi: set[str] | None) -> str:
+        """Rescore "R|devanagari" beam hypotheses with
+        * agreement with how people romanise the word (``ev``, human; else
+          ``casual``, the model's casual-Roman beam as a probability spread),
+          compared gemination-blind: casual typists drop doubled consonants,
+          so this may choose vowels (dushman vs dashman) but never doubling;
+        * a bonus when the Devanagari is a real Hindi word spelling this Urdu
+          word (``hindi``: hindi_fold keys) -- Devanagari writes the short
+          vowels Urdu leaves out (चक्कियों, not चुकियों, for چکیوں)."""
+        refs: list[tuple[str, float]] = []
+        if ev:
+            total = sum(ev.values())
+            scale = self.evidence_weight * min(1.0, total / 2.0) / total
+            refs = [(_degeminate(fold_roman(e)), w * scale) for e, w in ev.items()]
+        elif casual:
+            top = max(s for _, s in casual)
+            ps = [(_degeminate(fold_roman(t)), math.exp(s - top)) for t, s in casual]
+            z = sum(p for _, p in ps)
+            refs = [(t, self.casual_weight * p / z) for t, p in ps]
+
+        def score(h):
+            rich, deva = h[0].split("|")
+            s = h[1]
+            if refs:
+                f = _degeminate(fold_roman(to_plain(rich)))
+                s += sum(w * difflib.SequenceMatcher(None, f, e).ratio() ** 2 for e, w in refs)
+            if hindi and hindi_fold(deva) in hindi:
+                s += self.hindi_bonus
+            return s
+        return max(hyps, key=score)[0]
 
     def _casual_override(self, key: str, rich: str) -> str | None:
         """Plain-Roman fallback for a model reading that strong human evidence
@@ -203,19 +276,6 @@ class NeuralTransliterator:
         if difflib.SequenceMatcher(None, mine, _degeminate(fold_roman(top))).ratio() >= 0.75:
             return None
         return top
-
-    def _evidence_pick(self, hyps: list[tuple[str, float]], ev: dict[str, float]) -> str:
-        """Rerank beam hypotheses by agreement with human casual romanisations.
-        Compared gemination-blind: casual typists drop doubled consonants, so
-        evidence may choose vowels (dushman vs dashman) but never doubling."""
-        total = sum(ev.values())
-        strength = min(1.0, total / 2.0)
-        refs = [(_degeminate(fold_roman(e)), w) for e, w in ev.items()]
-
-        def sim(text):
-            f = _degeminate(fold_roman(to_plain(text.split("|")[0])))
-            return sum(w * difflib.SequenceMatcher(None, f, e).ratio() ** 2 for e, w in refs) / total
-        return max(hyps, key=lambda h: h[1] + self.evidence_weight * strength * sim(h[0]))[0]
 
     def _deva_for(self, readings: list[str]) -> dict[str, str]:
         """R reading -> Hindi-orthography Devanagari."""
@@ -249,6 +309,27 @@ class NeuralTransliterator:
                 return ("कुल", "kul", "kul")
             return ("कल", "kal", "kal")
         return None
+
+    def _gpt_ctx(self, key: str, ctx: dict) -> list[str | None] | None:
+        """GPT's reading of ``key`` next to these neighbours, per script
+        (None where GPT's data has no context-specific reading)."""
+        res = [None, None, None]
+        for c in (self.gpt_ctx.get(f"L\t{ctx['prev']}\t{key}") if ctx["prev"] else None,
+                  self.gpt_ctx.get(f"R\t{key}\t{ctx['next']}") if ctx["next"] else None):
+            if c:                                   # the next word decides last
+                res = [c[s] or res[s] for s in range(3)]
+        return res if any(res) else None
+
+    def _gpt_join(self, a: str, b: str) -> list[str | None] | None:
+        """How GPT joins the words ``a b`` -> per script " ", "-", "-e-" or
+        "+" (written as one word, ``gpt_merge``), or None when GPT's data
+        never joined them. A script without data borrows another's join
+        (never a "+", which needs that script's own merged spelling)."""
+        j = self.gpt_joins.get(f"{a}\t{b}")
+        if not j:
+            return None
+        fill = next((x for x in (j[1], j[2], j[0]) if x and x != "+"), None)
+        return [x or fill for x in j]
 
     def _curated(self, key: str):
         """-> (devanagari, plain, R-or-None) or None. R is None when it still
@@ -309,16 +390,89 @@ class NeuralTransliterator:
 
     def transliterate(self, text: str) -> tuple[str, str, str]:
         """-> (devanagari, roman_plain, roman_diacritic)."""
+        if not self.gpt_lines:
+            return self._transliterate(text)
+        lines = _clean(text).split("\n")
+        hits = [self.gpt_lines.get(_line_key(l)) if l.strip() else None for l in lines]
+        if not any(hits):
+            return self._transliterate(text)
+        # lines GPT has read come back verbatim; the rest go through the
+        # engine together (one model batch), newline = sentence boundary
+        miss = [l for l, h in zip(lines, hits) if l.strip() and not h]
+        rows = []
+        if miss:
+            outs = [s.split("\n") for s in self._transliterate("\n".join(miss))]
+            rows = (list(zip(*outs)) if all(len(o) == len(miss) for o in outs)
+                    else [self._transliterate(l) for l in miss])
+        it = iter(rows)
+        out = ([], [], [])
+        for line, hit in zip(lines, hits):
+            row = hit or (next(it) if line.strip() else ("", "", ""))
+            for s in range(3):
+                out[s].append(row[s])
+        return tuple("\n".join(o) for o in out)
+
+    def _gpt_seps(self, parts: list[str], keys: dict):
+        """GPT's joins between Urdu words separated by a single space ->
+        (separator index -> (devanagari, plain, rekhta) joiner,
+         word index -> per-script replacement, where GPT writes a pair as
+         one word: the pair's spelling on the first word, "" on the second)."""
+        seps, words = {}, {}
+        if not self.gpt_joins:
+            return seps, words
+        o_word = "و" in self.gpt_words
+        order = sorted(keys)
+        for a, b in zip(order, order[1:]):
+            if b != a + 2 or parts[a + 1] != " " or keys[a][3] or keys[b][0]:
+                continue
+            ka, kb = keys[a][1], keys[b][1]
+            j = self._gpt_join(ka, kb)
+            merged = self.gpt_merge.get(f"{ka}\t{kb}") or (None, None, None)
+            if j is None and o_word and "و" in (ka, kb):
+                j = self.gpt_o_join
+            elif j is None and kb in _FUTURE and kb in self.gpt_future:
+                # an unseen verb + گا/گے/گی: written as one word as often as
+                # GPT does (karega, jaaunga) -- spelled from the verb's reading
+                j = ["+" if r >= 0.5 else " " for r in self.gpt_future[kb]]
+                merged = [("+", kb)] * 3
+            if not j:
+                continue
+            sep = []
+            for s, x in enumerate(j):
+                if x == "+" and merged[s] and s not in words.get(a, {}) \
+                        and s not in words.get(b, {}):
+                    words.setdefault(a, {})[s] = merged[s]
+                    words.setdefault(b, {})[s] = ""
+                    sep.append("")
+                else:
+                    sep.append(_JOIN_TEXT.get(x, _JOIN_TEXT[" "])[s])
+            seps[a + 1] = tuple(sep)
+        return seps, words
+
+    def _transliterate(self, text: str) -> tuple[str, str, str]:
         parts, keys, plan = self._resolve(text)
+        seps, merged = self._gpt_seps(parts, keys)
+        o_word = "و" in self.gpt_words        # GPT's data reads و as a word
         deva_out, plain_out, dia_out = [], [], []
         for i, part in enumerate(parts):
             if i not in keys:
-                deva_out.append(part)
-                plain_out.append(part)
-                dia_out.append(part)
+                sep = seps.get(i, (part, part, part))
+                deva_out.append(sep[0])
+                plain_out.append(sep[1])
+                dia_out.append(sep[2])
                 continue
             prefix, key, voc, suffix = keys[i]
-            if key == "و" and 0 < i < len(parts) - 1 and not prefix and not suffix:
+            after_digit = bool(i and parts[i - 1][-1:].isdigit() and not prefix)
+            if after_digit and self.gpt_words:
+                if key == "ء":                  # 1980ء -> GPT keeps just the year
+                    deva_out.append(_rule._render_punct(suffix, True))
+                    plain_out.append(_rule._render_punct(suffix, False))
+                    dia_out.append(_rule._render_punct(suffix, False))
+                    continue
+                deva_out.append(" ")            # 98فیصد -> "98 feesad", as GPT spaces it
+                plain_out.append(" ")
+                dia_out.append(" ")
+            if key == "و" and 0 < i < len(parts) - 1 and not prefix and not suffix and not o_word:
                 d = pl = dia = _O
             else:
                 d, pl, rich, _, dia = plan[i]
@@ -326,9 +480,14 @@ class NeuralTransliterator:
                     dia = to_rekhta(rich) if rich else _rule.transliterate_word(
                         _rule._fold_key(key), style="diacritic")[1]
                 # izafat written with a zer / hamza: dil-e-nādāñ, ḳhāna-e-dil
+                # (unless GPT's join for this pair already decided it)
                 if voc.endswith(_ZER) or key.endswith("ۂ") or key.endswith("ٔ"):
-                    if not suffix:
+                    if not suffix and i + 1 not in seps:
                         d, pl, dia = d + _IZAFAT, pl + _IZAFAT, dia + _IZAFAT
+            if i in merged:                    # GPT writes this word with its neighbour
+                m = merged[i]
+                d, pl, dia = (_future(m[s], x, s) if isinstance(m.get(s), tuple) else m.get(s, x)
+                              for s, x in enumerate((d, pl, dia)))
             deva_out.append(_rule._render_punct(prefix, True) + d + _rule._render_punct(suffix, True))
             plain_out.append(_rule._render_punct(prefix, False) + pl + _rule._render_punct(suffix, False))
             dia_out.append(_rule._render_punct(prefix, False) + dia + _rule._render_punct(suffix, False))
@@ -339,10 +498,7 @@ class NeuralTransliterator:
         """Tokenise ``text`` and pick every Urdu word's reading -> (parts,
         keys, plan) where plan[idx] = [devanagari, plain, R, None, rekhta];
         rekhta is None when it is rendered from R."""
-        text = unicodedata.normalize("NFC", text)
-        text = re.sub(r"[^\S\n]+", " ", text)
-        text = re.sub(r" *\n *", "\n", text).strip()
-        parts = _split(text)
+        parts = _split(_clean(text))
         order = [i for i, p in enumerate(parts) if _URDU_RUN.fullmatch(p)]
 
         keys: dict[int, tuple[str, str, str, str]] = {}   # idx -> (prefix, key, voc, suffix)
@@ -353,6 +509,9 @@ class NeuralTransliterator:
         # pass 1: decide each word's tier; collect what the model must fill
         plan: dict[int, list] = {}     # idx -> [deva, plain, R, model_src, rekhta]
         done: set[int] = set()         # final already (context rule / dictionary)
+        gpt_over: dict[int, list] = {}  # idx -> GPT's spelling for some scripts only
+        from_gpt: set[int] = set()      # plain Roman taken from GPT's tables
+        over_none = (None, None, None)
         ne_before = False
         for n, i in enumerate(order):
             prefix, key, voc, suffix = keys[i]
@@ -376,6 +535,19 @@ class NeuralTransliterator:
                 continue
             src = voc if voc != key else key      # written harakat help the model
             hit = self._context(key, ctx) if context else None
+            # GPT: its context reading beats the homograph rules, which beat
+            # its majority reading; a script GPT's data lacks falls through
+            over = [None, None, None] if hit else list(self.gpt_words.get(key) or over_none)
+            gctx = self._gpt_ctx(key, ctx) if context and self.gpt_ctx else None
+            if gctx:
+                over = [gctx[s] or over[s] for s in range(3)]
+            if all(over):
+                plan[i] = [over[0], over[1], None, None, over[2]]
+                done.add(i)
+                from_gpt.add(i)
+                continue
+            if any(over):
+                gpt_over[i] = over
             if hit:
                 plan[i] = [hit[0], hit[1], hit[2], None, None]
                 done.add(i)
@@ -440,10 +612,69 @@ class NeuralTransliterator:
                 plain = self.english[key]
             p[:] = [deva, plain if plain is not None else (to_plain(rich) if rich else ""),
                     rich, None, dia]
+        for i, over in gpt_over.items():
+            p = plan[i]
+            p[0], p[1], p[4] = over[0] or p[0], over[1] or p[1], over[2] or p[4]
+            if over[1]:
+                from_gpt.add(i)
+        if self.gpt_words:                  # GPT's plain Roman writes ڑ as r: laraa, tukre
+            for i, p in plan.items():
+                if i not in from_gpt and "ڑ" in keys[i][1] and p[1]:
+                    p[1] = _retroflex_r(keys[i][1], p[1])
         return parts, keys, plan
 
 
 # ---------------------------------------------------------------------------
+
+_JOIN_TEXT = {" ": (" ", " ", " "), "-": ("-", "-", "-"), "-e-": ("-ए-", "-e-", "-e-")}
+_FUTURE = {"گا": ("गा", "ga", "gā"), "گے": ("गे", "ge", "ge"), "گی": ("गी", "gi", "gī")}
+
+
+def _retroflex_r(key: str, plain: str) -> str:
+    """Plain Roman with ڑ spelled r (GPT's habit: laraa, tukre, chhor)
+    instead of d. The Urdu's د / ڈ / ڑ map in order onto the reading's
+    d's; if the counts differ (a doubled dd, an English spelling) the
+    reading is left alone."""
+    urdu_d = [c for c in key if c in "دڈڑ"]
+    at = [m.start() for m in re.finditer("d", plain)]
+    if len(at) != len(urdu_d):
+        return plain
+    out = list(plain)
+    for pos, c in zip(at, urdu_d):
+        if c == "ڑ":
+            out[pos] = "r"
+    return "".join(out)
+
+
+def _future(mark: tuple[str, str], verb: str, script: int) -> str:
+    """Verb + future suffix as one word, the way GPT spells it: karega,
+    jaaunga, honge, denge (plain Roman reshapes the verb's ending;
+    Devanagari and Rekhta just join: लाएँगे, lāeñge)."""
+    suf = _FUTURE[mark[1]][script]
+    if script == 1:
+        if verb.endswith(("oon", "un")) and suf in ("ga", "gi"):
+            return verb[:-3 if verb.endswith("oon") else -2] + "un" + suf    # jaaunga
+        if verb.endswith("oon") and suf == "ge":
+            return verb[:-3] + "on" + suf                                    # honge
+        for end in ("yein", "yen", "ein", "en"):
+            if verb.endswith(end):
+                return verb[:-len(end)] + ("y" if end[0] == "y" else "") + "en" + suf   # denge
+        if verb.endswith("aaye"):
+            verb = verb[:-4] + "aae"                                         # jaaegi
+    return verb + suf
+
+
+def _clean(text: str) -> str:
+    """NFC, single spaces, no space around line breaks."""
+    text = unicodedata.normalize("NFC", text)
+    text = re.sub(r"[^\S\n]+", " ", text)
+    return re.sub(r" *\n *", "\n", text).strip()
+
+
+def _line_key(line: str) -> str:
+    """A line as the GPT verbatim-line table keys it."""
+    return re.sub(r"\s+", " ", norm_urdu(unicodedata.normalize("NFC", line))).strip()
+
 
 def _split(text: str) -> list[str]:
     """Urdu word runs (with any edge punctuation) and everything else, in order."""

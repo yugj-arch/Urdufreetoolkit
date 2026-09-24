@@ -76,7 +76,7 @@ def top_words(n: int) -> list[tuple[str, int]]:
 def draft(n: int) -> None:
     import neural_translit as nt
     import transliterate as rule
-    eng = nt.NeuralTransliterator(dictionary_path=None)
+    eng = nt.NeuralTransliterator(dictionary_path=None, gpt_path=None)
     words = top_words(n)
     rows = eng.analyze([w for w, _ in words])
     if len(rows) != len(words):
@@ -113,7 +113,9 @@ def read_tsv(path: Path, sep: str = "\t") -> list[list[str]]:
     return out
 
 
-def build() -> None:
+def entries() -> tuple[list[tuple[str, str, str, str, str]], int]:
+    """Draft + fixes -> ([(urdu, devanagari, R, plain, rekhta)], n hand-fixed).
+    R is the reviewed canonical reading (the trainer learns from it)."""
     rows = read_tsv(DRAFT)
     fixes: dict[str, list[str]] = {}
     for f in read_tsv(FIXES, "|") if FIXES.exists() else []:
@@ -143,7 +145,7 @@ def build() -> None:
                 rekhta = fx[3]
         if not (deva and plain and rekhta):
             raise SystemExit(f"incomplete entry for {w}: {deva!r} {plain!r} {rekhta!r}")
-        out.append((w, norm_nasals(deva), plain, rekhta))
+        out.append((w, norm_nasals(deva), rich, plain, rekhta))
     # fixes for words outside the draft are extra entries (rare forms worth pinning)
     for w, fx in fixes.items():
         if w in used or fx[0] == "-":
@@ -152,12 +154,17 @@ def build() -> None:
             raise SystemExit(f"new word {w} needs devanagari and R")
         plain = fx[2] if len(fx) > 2 and fx[2] not in (".", "") else to_plain(fx[1])
         rekhta = fx[3] if len(fx) > 3 and fx[3] not in (".", "") else to_rekhta(fx[1])
-        out.append((w, norm_nasals(fx[0]), plain, rekhta))
+        out.append((w, norm_nasals(fx[0]), fx[1], plain, rekhta))
+    return out, len(used)
+
+
+def build() -> None:
+    out, n_fixed = entries()
     with OUT.open("w", encoding="utf-8", newline="\n") as fh:
         fh.write(HEADER.format(n=f"{len(out):,}"))
-        for row in out:
-            fh.write("\t".join(row) + "\n")
-    print(f"build: {len(out)} entries ({len(used)} hand-fixed) -> {OUT}")
+        for w, deva, _, plain, rekhta in out:
+            fh.write("\t".join((w, deva, plain, rekhta)) + "\n")
+    print(f"build: {len(out)} entries ({n_fixed} hand-fixed) -> {OUT}")
 
 
 def main(argv=None):

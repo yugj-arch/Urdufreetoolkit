@@ -18,7 +18,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 /* The engines each step pre-ticks on load: the recommended ones that are
    available, else the first working engine of that kind. You can tick more than
    one per step to compare them side by side. */
-const RECOMMENDED = { ocr: ["gcv"], translit: ["neural"] };
+const RECOMMENDED = { ocr: ["gcv"], translit: ["rekhta"] };
 
 const ZOOM = { min: 0.7, max: 1.9, step: 0.15 };
 
