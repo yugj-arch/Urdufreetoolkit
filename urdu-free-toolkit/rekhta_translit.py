@@ -28,7 +28,8 @@ import re
 import threading
 from pathlib import Path
 
-from urdu_nn.rekhta_roman import Reader, WordModel, deva_units, render
+from urdu_nn.rekhta_roman import (Reader, WordModel, align_units, deva_units, reading_ok,
+                                  render)
 from urdu_nn.rekhta_text import segments
 
 ROOT = Path(__file__).resolve().parent
@@ -86,45 +87,70 @@ def _clean(deva: str) -> str:
     return re.sub(r"\s+", " ", deva).strip()
 
 
+def _lines_up(run: str, deva: str) -> bool:
+    return align_units(run.split(), deva_units(deva)) is not None
+
+
 class Ensemble:
-    """Our line model and Rekhta's own, refereed by Rekhta's reverse model.
+    """Rekhta's reading, verbatim, wherever it is sound; our model where it breaks.
 
-    Candidates for a run are our model's beam plus Rekhta's greedy reading.
-    Each is scored by how well it reads back into the Urdu that was written,
-    log P(urdu | devanagari) under ``hi2ur`` (a candidate that drops, adds or
-    misreads a word reads back to different Urdu), plus a small weight on our
-    model's own score. A candidate whose words don't line up one-to-one with
-    the Urdu is out."""
+    Rekhta's forward model reads the run and its reverse model reads that
+    Devanagari back into Urdu. If the reading passes ``reading_ok`` -- the
+    same test that picked our training labels: its words line up with the
+    Urdu, nothing looped, and it reads back as the Urdu written -- it is
+    the answer, unchanged. Otherwise (a loop, a dropped, doubled or misread
+    word) our model's beam joins in and every candidate is scored by the
+    read-back log P(urdu | devanagari), plus a small weight on our model's
+    own score."""
 
-    def __init__(self, student: LineModel, fwd, back, prior: float = 0.3, teacher_prior: float = -0.05):
+    def __init__(self, student: LineModel, fwd, back, prior: float = 0.3, margin: float = 0.3):
         self.student, self.fwd, self.back = student, fwd, back
-        self.prior, self.teacher_prior = prior, teacher_prior
+        self.prior, self.margin = prior, margin
+        self.stats = {"rekhta": 0, "refereed": 0}
 
     def choose(self, runs: list[str]) -> list[str]:
-        nb = self.student.nbest(runs)
-        tg = self.fwd(runs)
-        cands: list[list[tuple[str, float]]] = []
-        for run, hyps, t in zip(runs, nb, tg):
-            n = len(run.split())
+        out: list[str | None] = [None] * len(runs)
+        tg = [_clean(t) for t in self.fwd(runs)]
+        backs = self.back(tg)
+        for i, (r, t, b) in enumerate(zip(runs, tg, backs)):
+            if not reading_ok(r, t, b):
+                out[i] = t
+        ok = [i for i, (r, t) in enumerate(zip(runs, tg)) if out[i] is None and t and _lines_up(r, t)]
+        lps = self.back.logprob([tg[i] for i in ok], [runs[i] for i in ok]) if ok else []
+        t_lp = dict(zip(ok, lps))
+        todo = [i for i in range(len(runs)) if out[i] is None]
+        self.stats["rekhta"] += len(runs) - len(todo)
+        self.stats["refereed"] += len(todo)
+        if not todo:
+            return out
+        nb = self.student.nbest([runs[i] for i in todo])
+        flat: list[tuple[int, str, float]] = []
+        for i, hyps in zip(todo, nb):
             seen: dict[str, float] = {}
             for h, s in hyps:
                 h = _clean(h)
-                if h and len(deva_units(h)) == n:
+                if h and _lines_up(runs[i], h):
                     seen.setdefault(h, s)
-            t = _clean(t)
-            if t and len(deva_units(t)) == n:
-                seen.setdefault(t, (max(seen.values()) if seen else 0.0) + self.teacher_prior)
-            if not seen:                            # nobody lines up: our best guess stands
-                seen[_clean(hyps[0][0]) if hyps else t] = 0.0
-            cands.append(list(seen.items()))
-        flat = [(i, c, s) for i, cs in enumerate(cands) for c, s in cs]
-        lps = self.back.logprob([c for _, c, _ in flat], [runs[i] for i, _, _ in flat])
-        best: dict[int, tuple[float, str]] = {}
+            if not seen:                            # nothing lines up: our best guess stands
+                out[i] = _clean(hyps[0][0]) if hyps else tg[i]
+                continue
+            flat += [(i, c, s) for c, s in seen.items()]
+        lps = self.back.logprob([c for _, c, _ in flat], [runs[i] for i, _, _ in flat]) if flat else []
+        best: dict[int, tuple[float, str, float]] = {}
         for (i, c, s), lp in zip(flat, lps):
             sc = lp + self.prior * s
             if i not in best or sc > best[i][0]:
-                best[i] = (sc, c)
-        return [best[i][1] for i in range(len(runs))]
+                best[i] = (sc, c, lp)
+        for i in todo:
+            if out[i] is None:
+                _, cand, lp = best[i]
+                # the read-back can't hear short vowels (सताए and सिताए both read
+                # back as ستائے): Rekhta's reading only loses when it reads back
+                # clearly worse -- a dropped, doubled or misread word
+                if i in t_lp and t_lp[i] >= lp - self.margin:
+                    cand = tg[i]
+                out[i] = cand
+        return out
 
     __call__ = choose
 
@@ -227,30 +253,40 @@ class RekhtaTransliterator:
         return {r: self._cache[r] for r in runs}
 
     def _read_run(self, run: str, deva: str) -> tuple[str, str]:
-        """(Devanagari, R) for one run. When the model's words don't line up
-        one-to-one with the Urdu words, every word is read on its own."""
+        """(Devanagari, R) for one run. The model's words are lined up with
+        the Urdu words (one to one, or Rekhta's joins पाऊँगा and splits
+        सर-बसर); if they can't be, every word is read on its own. A reviewed
+        correction replaces whatever the model said for that word."""
         words = run.split()
         units = deva_units(deva)
-        if len(units) != len(words):
+        spans = align_units(words, units)
+        if spans is None:
             singles = self.deva(words)
-            units = []
-            for w in words:
-                u = deva_units(singles[w]) or [[singles[w], " "]]
-                units.append([u[0][0], " "])
+            units = [[(deva_units(singles[w]) or [[singles[w], " "]])[0][0], " "] for w in words]
+            spans = [(i, i + 1, i, i + 1) for i in range(len(words))]
             deva = " ".join(u[0] for u in units)
-        rich = []
-        fixed = False
-        for k, ((dw, join), uw) in enumerate(zip(units, words)):
-            fix = self.corrections.get(uw) or self.corrections.get(uw.rstrip("ِ"))
+        rich, fixed = [], False
+        for n, (i0, i1, j0, j1) in enumerate(spans):
+            urdu = "".join(words[i0:i1])
+            fix = (self.corrections.get(words[i0]) or self.corrections.get(words[i0].rstrip("ِ"))
+                   if i1 - i0 == 1 else None)
             if fix:
-                units[k][0] = dw = fix[0]
+                units[j0][0] = fix[0]
+                for k in range(j0 + 1, j1):          # the fix replaces a hyphenated pair too
+                    units[k][0] = ""
+                units[j0][1] = units[j1 - 1][1]
                 fixed = True
-            rich.append(fix[1] if fix and fix[1] else self.reader.read(dw, uw))
-            if k < len(units) - 1:
-                rich.append(join)
+                r = fix[1] or self.reader.read(fix[0], urdu)
+            else:                                     # सर-बसर: each half read on its own
+                r = "-".join(self.reader.read(units[k][0], urdu) if j1 - j0 == 1
+                             else self.reader.read(units[k][0], "") for k in range(j0, j1))
+            rich.append(r)
+            if n < len(spans) - 1:
+                rich.append(units[j1 - 1][1])
         if fixed:
-            deva = "".join(u[0] + (u[1].replace("-e-", "-ए-") if k < len(units) - 1 else "")
-                           for k, u in enumerate(units))
+            live = [u for u in units if u[0]]
+            deva = "".join(u[0] + (u[1].replace("-e-", "-ए-") if k < len(live) - 1 else "")
+                           for k, u in enumerate(live))
         return deva, "".join(rich)
 
     def transliterate_full(self, text: str) -> dict[str, str]:

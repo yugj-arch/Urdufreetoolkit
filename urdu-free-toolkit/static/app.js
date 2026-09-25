@@ -53,9 +53,22 @@ document.addEventListener("DOMContentLoaded", () => {
   try { state.script = ["ur", "hi", "ro"].includes(localStorage.getItem("urdu.script"))
         ? localStorage.getItem("urdu.script") : "ur"; } catch (e) {}
 
+  report("boot");
   loadConfig();
   state.ready = loadProviders({ retry: true });   // first call warms provider discovery — can take a second
 });
+
+/* Tell the server log what went wrong on this page. sendBeacon doesn't go
+   through window.fetch, so it still arrives if an extension has broken fetch. */
+function report(event, extra = {}) {
+  try {
+    navigator.sendBeacon("/api/client-log", JSON.stringify({
+      event, href: location.href, ua: navigator.userAgent,
+      nativeFetch: /\[native code\]/.test(Function.prototype.toString.call(window.fetch)),
+      ...extra,
+    }));
+  } catch (e) { /* diagnostics only */ }
+}
 
 /* ---------- runtime config ---------- */
 async function loadConfig() {
@@ -79,6 +92,7 @@ async function loadProviders({ retry = false } = {}) {
       break;
     } catch (e) {
       console.warn("/api/providers failed:", e);
+      report("providers-failed", { error: String(e), stack: String(e && e.stack || "").slice(0, 600) });
       const msg = `<p class="err">Can't reach the server — is <code>python app.py</code> running?${
         retry ? " Retrying…" : ""} <span class="hint">(${esc(e.message || String(e))})</span></p>`;
       Object.values(ENGINE_BOX).forEach((sel) => { const box = $(sel); if (box) box.innerHTML = msg; });
@@ -478,11 +492,52 @@ function wireWordPop() {
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeWordPop(); });
   window.addEventListener("resize", closeWordPop);
-  window.addEventListener("scroll", () => { if (!$("#word-pop").hidden) closeWordPop(); }, { passive: true });
+  window.addEventListener("scroll", () => {
+    // typing a fix must not lose the popover when the page nudges
+    if (!$("#word-pop").hidden && $("#wp-fix").hidden) closeWordPop();
+  }, { passive: true });
+  $("#wp-fix-open").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const f = state.popForms || {};
+    $("#wp-fix-hi").value = f.hi && f.hi !== "—" ? f.hi : "";
+    $("#wp-fix-ro").value = f.ro && f.ro !== "—" ? f.ro : "";
+    $("#wp-fix-msg").hidden = true;
+    $("#wp-fix-open").hidden = true;
+    $("#wp-fix").hidden = false;
+    $("#wp-fix-hi").focus();
+  });
+  $("#wp-fix").addEventListener("submit", saveWordFix);
+}
+
+/* A reviewed fix for one word: the Rekhta-style engine uses it from now on,
+   everywhere, over any model -- then the text is re-run so it shows. */
+async function saveWordFix(e) {
+  e.preventDefault();
+  const f = state.popForms || {};
+  const hi = $("#wp-fix-hi").value.trim(), ro = $("#wp-fix-ro").value.trim();
+  const msg = $("#wp-fix-msg");
+  if (!f.ur || !hi) { msg.textContent = "Devanagari is required."; msg.hidden = false; return; }
+  try {
+    const res = await fetch("/api/corrections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urdu: f.ur, devanagari: hi, roman: ro }),
+    });
+    const out = await res.json();
+    if (!out.saved) throw new Error(out.message || out.error || "not saved");
+    state.wordCache = {};
+    closeWordPop();
+    runTranslit();
+  } catch (err) {
+    msg.textContent = "Couldn't save: " + err.message;
+    msg.hidden = false;
+  }
 }
 
 function closeWordPop() {
   $("#word-pop").hidden = true;
+  $("#wp-fix").hidden = true;
+  $("#wp-fix-open").hidden = true;
   $$(".w.is-open").forEach((w) => w.classList.remove("is-open"));
 }
 
@@ -493,8 +548,13 @@ async function openWordPop(wordEl) {
   const lineIdx = +wordEl.dataset.line, wi = +wordEl.dataset.wi;
 
   let forms = alignedForms(lineIdx, wi);
-  const fill = (f) => ["ur", "hi", "ro", "rod"].forEach((k) =>
-    ($(`#word-pop [data-k="${k}"]`).textContent = (f && f[k]) || "—"));
+  const fill = (f) => {
+    ["ur", "hi", "ro", "rod"].forEach((k) =>
+      ($(`#word-pop [data-k="${k}"]`).textContent = (f && f[k]) || "—"));
+    state.popForms = f || null;
+    // fixes are the Rekhta-style engine's, and need the Urdu word they're for
+    $("#wp-fix-open").hidden = !(f && f.ur && state.activeEngine === "rekhta");
+  };
 
   if (forms) {
     pop.classList.remove("is-loading");

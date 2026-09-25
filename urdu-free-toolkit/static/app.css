@@ -315,6 +315,19 @@ textarea:focus, input[type="password"]:focus, input[type="text"]:focus {
 .wp-row [data-k="hi"] { font-family: var(--deva); font-size: 17px; }
 .wp-row [data-k="ro"], .wp-row [data-k="rod"] { font-family: var(--serif); }
 #word-pop.is-loading .wp-val:empty::after { content: "…"; color: var(--ink-3); }
+.wp-fix-open {
+  margin-top: 8px; padding: 0; border: 0; background: none; cursor: pointer;
+  font-size: 12px; color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
+}
+.wp-fix { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-2); }
+.wp-fix[hidden], .wp-fix-open[hidden] { display: none; }
+.wp-fix input {
+  font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--surface); color: var(--ink); min-width: 0;
+}
+.wp-fix input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.wp-fix .btn-primary { font-size: 12.5px; padding: 6px 12px; }
+.wp-fix-msg { margin: 0; font-size: 12px; color: var(--accent-2); }
 
 code { background: var(--line-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; font-family: var(--mono); }
 

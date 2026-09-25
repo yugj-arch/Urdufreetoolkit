@@ -94,6 +94,13 @@
   <div class="wp-row"><span class="wp-lab" lang="hi">हिंदी</span><span class="wp-val" data-k="hi"></span></div>
   <div class="wp-row"><span class="wp-lab">Roman</span><span class="wp-val" data-k="ro"></span></div>
   <div class="wp-row wp-row--dia"><span class="wp-lab">Roman&nbsp;+</span><span class="wp-val" data-k="rod"></span></div>
+  <button class="wp-fix-open" id="wp-fix-open" type="button" hidden>Fix spelling</button>
+  <form class="wp-fix" id="wp-fix" hidden>
+    <input id="wp-fix-hi" lang="hi" autocomplete="off" aria-label="Correct Devanagari">
+    <input id="wp-fix-ro" autocomplete="off" aria-label="Correct Roman" placeholder="Roman: KHauf, aañkh, pa.Dhaa.ii">
+    <button class="btn-primary" id="wp-fix-save" type="submit">Save — always use this</button>
+    <p class="wp-fix-msg" id="wp-fix-msg" hidden></p>
+  </form>
 </div>
 
 <script src="{{ url_for('static', filename='app.js') }}"></script>

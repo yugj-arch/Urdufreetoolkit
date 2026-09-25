@@ -37,13 +37,14 @@ def _held_out() -> set[str]:
             for l in (DS.parents[0] / "translit_ds" / "test.jsonl").open(encoding="utf-8")}
 
 
-def _systems(names, model_path=None):
+def _systems(names, model_path=None, device="cpu"):
     out = {}
     for n in names:
         if n in ("student", "teacher", "ensemble"):
             import rekhta_translit
             kw = {"model_path": Path(model_path)} if model_path else {}
-            eng = rekhta_translit.RekhtaTransliterator(mode=n, corrections_path=Path("-none-"), **kw)
+            eng = rekhta_translit.RekhtaTransliterator(mode=n, corrections_path=Path("-none-"),
+                                                       device=device, **kw)
             out[n] = lambda text, e=eng: (lambda r: (r["devanagari"], r["plain"]))(e.transliterate_full(text))
         elif n == "neural":
             import neural_translit
@@ -79,9 +80,10 @@ def _fold_r(s: str) -> str:
     return fold_roman(re.sub(r"[^\w\s'-]", "", s))
 
 
-def run(names, n_poem=1500, n_human=800, n_words=1500, seed=7, model_path=None) -> dict:
+def run(names, n_poem=1500, n_human=800, n_words=1500, seed=7, model_path=None,
+        device="cpu") -> dict:
     rng = random.Random(seed)
-    systems = _systems(names, model_path)
+    systems = _systems(names, model_path, device)
     poem = [r for r in load_split("test") if r[0] == "poem" and r[4]]
     poem = rng.sample(poem, min(n_poem, len(poem)))
     native = (DS.parents[0] / "translit_raw" / "dakshina_dataset_v1.0" / "ur" / "romanized"
@@ -123,9 +125,10 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=str(DS / "benchmark.json"))
     ap.add_argument("--model", default=None, help="student checkpoint (default: data/rekhta_model/model.pt)")
     ap.add_argument("--n", type=float, default=1.0, help="fraction of each test set, for quick runs")
+    ap.add_argument("--device", default="cpu")
     a = ap.parse_args(argv)
     res = run(a.systems.split(","), n_poem=int(1500 * a.n), n_human=int(800 * a.n),
-              n_words=int(1500 * a.n), model_path=a.model)
+              n_words=int(1500 * a.n), model_path=a.model, device=a.device)
     Path(a.out).write_text(json.dumps(res, indent=1), encoding="utf-8")
     return 0
 

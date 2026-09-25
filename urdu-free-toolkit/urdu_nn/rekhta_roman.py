@@ -284,9 +284,130 @@ def deva_units(deva_line: str) -> list[list[str]]:
     return units
 
 
-def align(urdu_words: list[str], units: list[list[str]]) -> list[int] | None:
-    """Index of the Devanagari unit for each Urdu word, or None when the
-    counts disagree (the caller then reads word by word)."""
-    if len(urdu_words) != len(units):
+def reading_ok(urdu: str, deva: str, back: str, min_back: float = 0.85) -> str:
+    """"" when Rekhta's reading ``deva`` of the Urdu run ``urdu`` is sound,
+    else why not: too long (a loop), Latin letters, words that don't line up
+    with the Urdu (dropped, doubled), or a read-back (``back`` = its reverse
+    model's Urdu for ``deva``) that isn't the Urdu written. The same test
+    picks the teacher's training labels and, at runtime, when the engine
+    gives Rekhta's reading verbatim."""
+    from urdu_nn.rekhta_text import norm_word
+    if not deva or len(deva) > 2 * len(urdu) + 12:
+        return "length"
+    if any(c.isascii() and c.isalpha() for c in deva):
+        return "latin"
+    if align_units(urdu.split(), deva_units(deva)) is None:
+        return "words"
+
+    def nb(s):
+        return " ".join(norm_word(w).rstrip(ZER) for w in s.split())
+    b, want = nb(back), nb(urdu)
+    if b != want and _sim(b, want) < min_back:
+        return "roundtrip"
+    return ""
+
+
+def _urdu_of(deva: str) -> str:
+    """A likely Urdu spelling of one Devanagari word; Rekhta's ain apostrophe
+    (मोअ'ला, ए'लान) becomes ع."""
+    from urdu_nn.scheme import deva_to_urdu_candidates
+    parts = []
+    for p in re.sub("अ'", "'", deva).split("'"):
+        d = re.sub(r"[^ऀ-ॿ]", "", p)
+        c = deva_to_urdu_candidates(d, limit=1) if d else []
+        parts.append(c[0] if c else "")
+    return "ع".join(parts)
+
+
+def _sim(a: str, b: str) -> float:
+    from rapidfuzz.distance import Levenshtein
+    return Levenshtein.normalized_similarity(a, b)
+
+
+# Urdu letters that sound alike -- Devanagari writes each group with one
+# letter (त for ت/ط, ह for ہ/ح, स for س/ص/ث, ज़ for ز/ذ/ض/ظ), so a spelling
+# rebuilt from Devanagari can only be compared with the written Urdu by sound
+_SOUND = str.maketrans({"ط": "ت", "ث": "س", "ص": "س", "ح": "ہ", "ذ": "ز", "ض": "ز",
+                        "ظ": "ز", "ژ": "ز", "ق": "ک", "غ": "گ", "خ": "ک", "ۂ": "ہ", "ۃ": "ہ",
+                        "ة": "ہ", "ئ": "ی", "ۓ": "ی", "ے": "ی", "ؤ": "و", "آ": "ا",
+                        "أ": "ا", "ں": "ن", "ع": None, "ء": None, "ھ": None,
+                        "ٔ": None, "ٰ": None, ZER: None})
+
+
+def _sound(urdu: str) -> str:
+    urdu = urdu.replace("یٰ", "ا")                  # اعلیٰ: the ی is read ā
+    urdu = re.sub("ہ$", "ا", urdu)                 # silent final he reads like alif
+    return urdu.translate(_SOUND)
+
+
+def _skel(sound: str) -> str:
+    """Consonants only: the vowel letters are where Urdu and Devanagari
+    spellings of one word disagree most (عہدہ ओहदा, معلیٰ मोअ'ला)."""
+    return re.sub("[اوی]", "", sound)
+
+
+_IZAFAT_TAIL = re.compile("(ئے|ۓ|ۂ|ٔ|ے|ی)$")
+
+
+def _word_sim(urdu: str, deva: str, izafat: bool = False) -> float:
+    """How well a Devanagari reading fits the Urdu written -- by sound, and
+    by consonant skeleton. With izafat the Urdu may spell the -e- itself
+    (عطائے = अता-ए-, خانۂ = ख़ाना-ए-)."""
+    d = _sound(_urdu_of(deva))
+    forms = [urdu] + ([_IZAFAT_TAIL.sub("", urdu)] if izafat else [])
+    best = 0.0
+    for f in forms:
+        u = _sound(f)
+        best = max(best, _sim(u, d), _sim(_skel(u), _skel(d)) if _skel(u) or _skel(d) else 0.0)
+    return best
+
+
+_MOVES = ((1, 1, 0.0, 0.45), (2, 1, 0.1, 0.6), (1, 2, 0.1, 0.6), (3, 1, 0.2, 0.7),
+          (1, 3, 0.2, 0.7))
+
+
+def align_units(urdu_words: list[str], units: list[list[str]]):
+    """Line up Urdu words with Devanagari units -> [(i0, i1, j0, j1)] spans
+    (Urdu words [i0, i1) are Devanagari units [j0, j1)), or None.
+
+    Mostly one to one, but Rekhta also writes two Urdu words as one
+    (پاؤں گا -> पाऊँगा, گل زار -> गुलज़ार) and one as a hyphenated pair
+    (سربسر -> सर-बसर). Each choice is scored by how close the Devanagari's
+    Urdu spelling is to the Urdu actually written."""
+    n, m = len(urdu_words), len(units)
+    if not n or not m:
         return None
-    return list(range(len(units)))
+    words = [w.rstrip(ZER) for w in urdu_words]
+    if n == m:
+        sims = [_word_sim(words[i], units[i][0], units[i][1] == "-e-") for i in range(n)]
+        if all(s >= 0.45 or len(words[i]) <= 2 for i, s in enumerate(sims)):
+            return [(i, i + 1, i, i + 1) for i in range(n)]
+    NEG = -1e9
+    best = [[NEG] * (m + 1) for _ in range(n + 1)]
+    back: list[list[tuple[int, int] | None]] = [[None] * (m + 1) for _ in range(n + 1)]
+    best[0][0] = 0.0
+    for i in range(n + 1):
+        for j in range(m + 1):
+            if best[i][j] == NEG:
+                continue
+            for di, dj, cost, floor in _MOVES:
+                if i + di > n or j + dj > m:
+                    continue
+                if dj > 1 and any(units[k][1] != "-" for k in range(j, j + dj - 1)):
+                    continue                     # only a plain hyphen splits one word
+                u = "".join(words[i:i + di])
+                d = "".join(units[k][0] for k in range(j, j + dj))
+                s = _word_sim(u, d, units[j + dj - 1][1] == "-e-")
+                if s < floor and not (di == dj == 1 and len(u) <= 2):
+                    continue
+                if best[i][j] + s - cost > best[i + di][j + dj]:
+                    best[i + di][j + dj] = best[i][j] + s - cost
+                    back[i + di][j + dj] = (di, dj)
+    if best[n][m] == NEG:
+        return None
+    spans, i, j = [], n, m
+    while i or j:
+        di, dj = back[i][j]
+        spans.append((i - di, i, j - dj, j))
+        i, j = i - di, j - dj
+    return spans[::-1]

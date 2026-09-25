@@ -76,8 +76,8 @@ def evaluate(model, vocab, rows, device, n=3000, beam=1) -> dict:
     model.eval()
     rows = rows[:n]
     line_ok = word_ok = words = 0
-    for i in range(0, len(rows), 256):
-        ch = rows[i:i + 256]
+    for i in range(0, len(rows), 128):
+        ch = rows[i:i + 128]
         src = pad_batch([encode_src(vocab, r[1]) for r in ch], device)
         hyps = beam_search(model, src, beam=beam, max_len=MAX_POS - 2)
         for h, r in zip(hyps, ch):
@@ -105,7 +105,13 @@ def main(argv=None):
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--limit", type=int, default=0, help="train rows (0 = all), for smoke runs")
     ap.add_argument("--device", default=None, help="cuda / cpu (default: cuda when present)")
+    ap.add_argument("--init", type=Path, default=None,
+                    help="continue from this checkpoint (its size and vocabulary win)")
+    ap.add_argument("--data", type=Path, default=None, help="dataset dir (default data/rekhta_ds)")
     args = ap.parse_args(argv)
+    if args.data:
+        global DS
+        DS = args.data
 
     torch.manual_seed(args.seed)
     random.seed(args.seed)
@@ -120,14 +126,23 @@ def main(argv=None):
         chars.update(r[1])
         chars.update(r[2])
     vocab = Vocab(sorted(chars) + [LINE_TAG])
+    init = torch.load(args.init, map_location="cpu", weights_only=False) if args.init else None
+    if init:
+        vocab.itos = init["itos"]
+        vocab.stoi = {c: i for i, c in enumerate(vocab.itos)}
     print(f"device={device} train={len(train)} dev={len(dev)} vocab={len(vocab)}", flush=True)
-    model = Seq2Seq(len(vocab), d_model=args.d_model, nhead=args.heads, enc_layers=args.layers,
-                    dec_layers=args.layers, ff=args.d_model * 4, max_len=MAX_POS).to(device)
-    # Seq2Seq starts its learnt positions at std 0.02 against token embeddings of
-    # std 1: fine for single words, but on 45-60 character lines the decoder then
-    # takes epochs to learn where it is in the source. Start them as sinusoids.
-    for emb in (model.pos_src, model.pos_tgt):
-        _sinusoid_(emb)
+    if init:
+        model = Seq2Seq(**init["cfg"]).to(device)
+        model.load_state_dict({k: v.float() for k, v in init["state"].items()})
+        print(f"from {args.init} (epoch {init.get('epoch')}, dev {init.get('dev')})", flush=True)
+    else:
+        model = Seq2Seq(len(vocab), d_model=args.d_model, nhead=args.heads, enc_layers=args.layers,
+                        dec_layers=args.layers, ff=args.d_model * 4, max_len=MAX_POS).to(device)
+        # Seq2Seq starts its learnt positions at std 0.02 against token embeddings of
+        # std 1: fine for single words, but on 45-60 character lines the decoder then
+        # takes epochs to learn where it is in the source. Start them as sinusoids.
+        for emb in (model.pos_src, model.pos_tgt):
+            _sinusoid_(emb)
     print(f"params={sum(p.numel() for p in model.parameters()) / 1e6:.2f}M", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.98), weight_decay=0.01)
     total = math.ceil(len(train) / args.bs) * args.epochs
@@ -169,6 +184,8 @@ def main(argv=None):
             if step % 500 == 0:
                 print(f"  step {step} loss {tot / n:.4f} {time.time() - t0:.0f}s", flush=True)
         acc = evaluate(model, vocab, dev, device)
+        if device == "cuda":       # a 6 GB laptop GPU spills to system RAM (10x slower) when full
+            torch.cuda.empty_cache()
         print(f"ep {ep:3d} step {step} loss {tot / max(n, 1):.4f} dev {acc} "
               f"lr {sched.get_last_lr()[0]:.2e} {time.time() - t0:.0f}s", flush=True)
         state = {k: v.detach().clone() for k, v in model.state_dict().items()}
@@ -190,7 +207,7 @@ def main(argv=None):
     scored = {}
     for name, c in cands.items():
         model.load_state_dict(c["state"])
-        scored[name] = evaluate(model, vocab, dev, device, beam=4)
+        scored[name] = evaluate(model, vocab, dev, device, n=1500, beam=4)
         print(f"{name} (epoch {c['epoch']}) dev(beam4) {scored[name]}", flush=True)
     pick = max(scored, key=lambda k: (scored[k]["line"], scored[k]["word"]))
     ck = cands[pick]
