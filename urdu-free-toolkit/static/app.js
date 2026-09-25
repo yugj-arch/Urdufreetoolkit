@@ -54,7 +54,7 @@ document.addEventListener("DOMContentLoaded", () => {
         ? localStorage.getItem("urdu.script") : "ur"; } catch (e) {}
 
   loadConfig();
-  state.ready = loadProviders();   // first call warms provider discovery — can take a second
+  state.ready = loadProviders({ retry: true });   // first call warms provider discovery — can take a second
 });
 
 /* ---------- runtime config ---------- */
@@ -68,12 +68,22 @@ async function loadConfig() {
 /* ---------- providers ---------- */
 const ENGINE_BOX = { ocr: "#ocr-engines", translit: "#translit-engines" };
 
-async function loadProviders() {
-  try {
-    state.providers = await (await fetch("/api/providers")).json();
-  } catch (e) {
-    $("#ocr-engines").innerHTML = '<p class="err">Could not load engines.</p>';
-    return;
+/* With `retry`, keep polling until the server answers — so a tab left open
+   while the server was down heals itself once `python app.py` is back. */
+async function loadProviders({ retry = false } = {}) {
+  for (;;) {
+    try {
+      const res = await fetch("/api/providers");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      state.providers = await res.json();
+      break;
+    } catch (e) {
+      const msg = `<p class="err">Can't reach the server — is <code>python app.py</code> running?${
+        retry ? " Retrying…" : ""}</p>`;
+      Object.values(ENGINE_BOX).forEach((sel) => { const box = $(sel); if (box) box.innerHTML = msg; });
+      if (!retry) return;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
   }
   renderEngineList("ocr");
   renderEngineList("translit");

@@ -202,6 +202,11 @@ if __name__ == "__main__":
     # loop and wedge — in-flight requests die and the browser sees
     # "Failed to fetch". Set URDU_RELOAD=1 if your checkout isn't in a synced dir.
     import os
+    import threading
+
+    # Provider discovery imports torch + the offline models (15-50 s cold).
+    # Warm it now so the page's first /api/providers call isn't the one waiting.
+    threading.Thread(target=registry.discover, daemon=True).start()
 
     use_reloader = os.environ.get("URDU_RELOAD") == "1"
     app.run(debug=True, host="0.0.0.0", port=5000, threaded=True,

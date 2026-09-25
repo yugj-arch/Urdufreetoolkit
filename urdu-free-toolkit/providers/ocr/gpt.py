@@ -29,8 +29,7 @@ class GptOcr(BaseProvider):
     def ocr(self, image: bytes) -> OcrResult:
         def _call():
             b64, mime = common.prepare_image(image)
-            client = common.get_client()
-            resp = client.chat.completions.create(
+            resp = common.chat(
                 model=common.MODEL,
                 response_format={"type": "json_object"},
                 **common.sampling_kwargs(),

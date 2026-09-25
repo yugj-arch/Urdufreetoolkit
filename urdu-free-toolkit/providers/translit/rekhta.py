@@ -22,7 +22,7 @@ from providers.base import (
 class RekhtaTranslit(BaseProvider):
     info = ProviderInfo(
         id="rekhta",
-        label="Rekhta-style (offline)",
+        label="DotSyndicate Fine-tune (offline)",
         capability=Capability.TRANSLIT,
         kind="offline",
         note="Line model distilled from Rekhta Labs' poetry transliterator. "

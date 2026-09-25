@@ -32,8 +32,7 @@ class GptTranslit(BaseProvider):
 
     def translit(self, text: str, opts: TranslitOpts) -> TranslitResult:
         def _call():
-            client = common.get_client()
-            resp = client.chat.completions.create(
+            resp = common.chat(
                 model=common.MODEL,
                 response_format={"type": "json_object"},
                 **common.sampling_kwargs(),

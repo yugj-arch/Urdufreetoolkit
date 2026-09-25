@@ -252,3 +252,29 @@ Built by `training/translit/gpt_distill.py` (runbook: `training/translit/README.
 - **Tables:** verbatim lines, per-script majority word spellings, context
   readings (prev/next word), and word-pair joins, aligned word-by-word to
   the Urdu (`align()` in the script).
+
+# data/rekhta_model/ -- the Rekhta-style line model (provider `rekhta`)
+
+Built by `training/rekhta/` (`label.py` -> `dataset.py` -> `train.py`; the
+runbook is in each module's docstring).
+
+- **Teacher:** Rekhta Labs' published models on Hugging Face,
+  `rekhtalabs/ur-2-hi-translit` (Urdu -> Devanagari, ~800k poetry pairs) and
+  `rekhtalabs/hi-2-ur-translit` (the reverse, used only to round-trip-check
+  labels). Downloaded to `data/rekhta_models/` (gitignored), never shipped.
+  **Licence:** the model cards say `license: other` and the repos' `LICENSE`
+  files are empty. Get Rekhta Labs' permission before redistributing this
+  student model or using it commercially.
+- **Input text:** the same Urdu Wikisource poetry and Dakshina Urdu Wikipedia
+  sentences as the GPT tier above (no rekhta.org text), cut into runs of
+  <= 45 characters (`urdu_nn/rekhta_text.py`): the teacher loops on longer input.
+- **Labels:** the teacher's greedy Devanagari. A label is kept only when it
+  has one Devanagari word per Urdu word and the reverse model gives back
+  (nearly) the same Urdu. About 91% pass.
+- **Gold words:** the Wiktionary lexicon (training half) and the reviewed
+  dictionary. Each word uses the teacher's reading where it differs from the
+  gold spelling only by convention (nukta, ँ/ं, ain). Otherwise it uses the
+  gold spelling rewritten in Rekhta's conventions.
+- **Roman:** not learned. It is read off the Devanagari
+  (`urdu_nn/rekhta_roman.py`), and schwas are chosen by the lexicon, the
+  dictionary, human romanisations and the word model.
