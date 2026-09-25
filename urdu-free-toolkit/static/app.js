@@ -78,8 +78,9 @@ async function loadProviders({ retry = false } = {}) {
       state.providers = await res.json();
       break;
     } catch (e) {
+      console.warn("/api/providers failed:", e);
       const msg = `<p class="err">Can't reach the server — is <code>python app.py</code> running?${
-        retry ? " Retrying…" : ""}</p>`;
+        retry ? " Retrying…" : ""} <span class="hint">(${esc(e.message || String(e))})</span></p>`;
       Object.values(ENGINE_BOX).forEach((sel) => { const box = $(sel); if (box) box.innerHTML = msg; });
       if (!retry) return;
       await new Promise((r) => setTimeout(r, 3000));

@@ -104,6 +104,28 @@ def render(rich: str, style: str) -> str:
     return "".join(p if p in (" ", "-") or not p else _render_word(p, s) for p in parts)
 
 
+_ASCII_IN = {".Dh": "ṛh", ".D": "ṛ", "KH": "x", "Th": "ṭh", "Dh": "ḍh", "chh": "ch", "ch": "c",
+             "sh": "ś", "zh": "ž", "aa": "ā", "ii": "ī", "uu": "ū", "T": "ṭ", "D": "ḍ",
+             "G": "ġ", "ñ": "~", ".": ""}
+
+
+def ascii_to_rich(ascii_: str) -> str:
+    """Rekhta's ASCII table back to R (a correction typed as ``KHauf-e-rasan``
+    or ``pa.Dhaa.ii``), longest match first; everything else passes through."""
+    out, i = [], 0
+    while i < len(ascii_):
+        for n in (3, 2, 1):
+            piece = ascii_[i:i + n]
+            if piece in _ASCII_IN:
+                out.append(_ASCII_IN[piece])
+                i += n
+                break
+        else:
+            out.append(ascii_[i])
+            i += 1
+    return "".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Devanagari word -> R
 # ---------------------------------------------------------------------------
