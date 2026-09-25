@@ -44,6 +44,15 @@ def load(split: str, kept_only: bool = True) -> list[tuple[str, str, str, float]
     return rows
 
 
+@torch.no_grad()
+def _sinusoid_(emb: torch.nn.Embedding) -> None:
+    n, d = emb.weight.shape
+    pos = torch.arange(n, dtype=torch.float32).unsqueeze(1)
+    div = torch.exp(torch.arange(0, d, 2, dtype=torch.float32) * (-math.log(10000.0) / d))
+    emb.weight[:, 0::2] = torch.sin(pos * div).to(emb.weight)
+    emb.weight[:, 1::2] = torch.cos(pos * div).to(emb.weight)
+
+
 def encode_src(vocab: Vocab, text: str) -> list[int]:
     from urdu_nn.model import UNK
     return [vocab.stoi[LINE_TAG]] + [vocab.stoi.get(c, UNK) for c in text]
@@ -114,6 +123,11 @@ def main(argv=None):
     print(f"device={device} train={len(train)} dev={len(dev)} vocab={len(vocab)}", flush=True)
     model = Seq2Seq(len(vocab), d_model=args.d_model, nhead=args.heads, enc_layers=args.layers,
                     dec_layers=args.layers, ff=args.d_model * 4, max_len=MAX_POS).to(device)
+    # Seq2Seq starts its learnt positions at std 0.02 against token embeddings of
+    # std 1: fine for single words, but on 45-60 character lines the decoder then
+    # takes epochs to learn where it is in the source. Start them as sinusoids.
+    for emb in (model.pos_src, model.pos_tgt):
+        _sinusoid_(emb)
     print(f"params={sum(p.numel() for p in model.parameters()) / 1e6:.2f}M", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.98), weight_decay=0.01)
     total = math.ceil(len(train) / args.bs) * args.epochs

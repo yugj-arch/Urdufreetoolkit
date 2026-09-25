@@ -47,6 +47,27 @@ def get_client():
     return _client
 
 
+def chat(**kwargs):
+    """``chat.completions.create`` with the account-level failures (no credits,
+    bad key) turned into a line a person can act on, instead of a 429 JSON dump."""
+    import openai
+
+    try:
+        return get_client().chat.completions.create(**kwargs)
+    except openai.RateLimitError as e:
+        if "insufficient_quota" in (getattr(e, "type", None), getattr(e, "code", None)) \
+                or getattr(e, "code", None) == "credit_balance_exhausted":
+            raise RuntimeError(
+                "OpenAI account is out of credits. Add credits at "
+                "platform.openai.com/settings/organization/billing, then retry."
+            ) from None
+        raise
+    except openai.AuthenticationError:
+        raise RuntimeError(
+            "OpenAI rejected the API key. Check OPENAI_API_KEY in Settings."
+        ) from None
+
+
 VISION_SYSTEM = """You are an expert transcriber and transliterator of Urdu text.
 
 You will be shown an image containing Urdu text. It may be in Nastaliq

@@ -20,7 +20,9 @@ import argparse
 import collections
 import hashlib
 import json
+import re
 import sys
+import unicodedata
 
 from urdu_nn.rekhta_roman import deva_units
 from urdu_nn.rekhta_text import ZER, norm_word

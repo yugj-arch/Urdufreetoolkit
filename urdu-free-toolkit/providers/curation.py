@@ -17,6 +17,6 @@ from __future__ import annotations
 # and the first entry is the engine the UI pre-selects on load (the one default).
 # At most four per step.
 FEATURED: dict[str, list[str]] = {
-    "ocr":       ["gcv", "gpt"],
+    "ocr":       ["gcv", "gpt", "gemini"],   # gemini: free-tier stand-in for gpt's vowel-restoring read
     "translit":  ["rekhta", "neural", "gpt", "rule"],
 }

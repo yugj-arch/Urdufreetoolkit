@@ -96,6 +96,31 @@ def test_reader_lets_human_evidence_pick_the_schwa():
     assert rr.Reader(evidence=ev).read("वसवसे", "وسوسے") == "vasvase"
 
 
+# -- distillation data ---------------------------------------------------------
+
+def test_dataset_drops_looping_or_misread_teacher_labels():
+    from training.rekhta.dataset import check
+    good = {"ur": "دل ہی تو ہے", "hi": "दिल ही तो है", "back": "دل ہی تو ہے"}
+    assert check(good, 0.85) == ""
+    looped = {"ur": "جو کو", "hi": "जो को को को को", "back": "جو کو کو کو کو"}
+    assert check(looped, 0.85) == "words"
+    misread = {"ur": "مکر", "hi": "मुकर्रर", "back": "مقرر"}
+    assert check(misread, 0.85) == "roundtrip"
+    izafat = {"ur": "خوف رسن", "hi": "ख़ौफ़-ए-रसन", "back": "خوف رسن"}
+    assert check(izafat, 0.85) == ""                     # -ए- is a joiner, not a word
+
+
+@pytest.mark.parametrize("urdu,gold,rekhta", [
+    ("یہاں", "यहां", "यहाँ"),        # nasal vowel with no top matra -> candrabindu
+    ("ہوں", "हूं", "हूँ"),
+    ("میں", "में", "में"),           # top matra: anusvara stays
+    ("قانون", "कानून", "क़ानून"),     # nukta where the Urdu letter calls for it
+])
+def test_gold_words_are_rewritten_in_rekhtas_conventions(urdu, gold, rekhta):
+    from training.rekhta.dataset import rekhta_conventions
+    assert rekhta_conventions(urdu, gold) == rekhta
+
+
 # -- the teacher and the engine (need the downloaded models) -------------------
 
 @pytest.fixture(scope="module")
