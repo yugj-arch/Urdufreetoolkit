@@ -76,11 +76,14 @@ def sys_rule(exact: dict | None):
     return run
 
 
-def sys_neural(lexicon: Path, evidence: Path | None, ev_weight: float, exact: dict | None):
-    from neural_translit import NeuralTransliterator
-    eng = NeuralTransliterator(lexicon_path=lexicon, evidence_path=evidence,
+def sys_neural(lexicon: Path, evidence: Path | None, ev_weight: float, exact: dict | None,
+               model: Path | None = None, **rerank):
+    from neural_translit import MODEL_PATH, NeuralTransliterator
+    eng = NeuralTransliterator(model_path=model or MODEL_PATH, **rerank,
+                               lexicon_path=lexicon, evidence_path=evidence,
                                english_path=None if evidence is None else DS / "english_train.json",
-                               dictionary_path=None, evidence_weight=ev_weight)
+                               dictionary_path=None, evidence_weight=ev_weight,
+                               gpt_path=None)
     eng.exact = dict(exact or {})
     print(f"  neural: model={'yes' if eng.has_model else 'NO'} lexicon={len(eng.lexicon)} "
           f"evidence={len(eng.evidence)} weight={ev_weight} dictionary={len(eng.exact)}",
@@ -217,6 +220,15 @@ def main(argv=None):
                     help="Dakshina split for sentences (tune on dev, report on test)")
     ap.add_argument("--ev-weight", type=float, default=2.0)
     ap.add_argument("--no-evidence", action="store_true")
+    ap.add_argument("--casual-weight", type=float, default=None,
+                    help="override the engine's CASUAL_WEIGHT (0 = off)")
+    ap.add_argument("--hindi-bonus", type=float, default=None,
+                    help="override the engine's HINDI_BONUS (0 = off)")
+    ap.add_argument("--beam", type=int, default=None)
+    ap.add_argument("--model", type=Path, default=None,
+                    help="score this checkpoint instead of the shipped model.pt")
+    ap.add_argument("--bench-out", type=Path,
+                    default=ROOT / "data" / "translit_model" / "benchmark.json")
     args = ap.parse_args(argv)
     rng = random.Random(args.seed)
 
@@ -248,7 +260,11 @@ def main(argv=None):
         if base == "rule":
             fn_for, label = sys_rule, "rule engine (offline)"
         elif base == "neural":
-            fn_for = lambda ex: sys_neural(lex_train, ev, args.ev_weight, ex)  # noqa: E731
+            rerank = {k: v for k, v in (("casual_weight", args.casual_weight),
+                                         ("hindi_bonus", args.hindi_bonus),
+                                         ("beam", args.beam)) if v is not None}
+            fn_for = lambda ex: sys_neural(lex_train, ev, args.ev_weight, ex, args.model,  # noqa: E731
+                                           **rerank)
             label = "neural (offline)"
         elif name in _COMMON:
             fn, label = sys_llm(name)
@@ -271,7 +287,7 @@ def main(argv=None):
         print(f"   words: deva {w['deva_acc']:.1%}  roman {w['roman_acc']:.1%}   "
               f"sents: word {s['word_acc']:.1%}  CER {s['cer']:.3f}   "
               f"coverage {w['coverage']:.0%}/{s['coverage']:.0%}  ({res['seconds']}s)", flush=True)
-    out = ROOT / "data" / "translit_model" / "benchmark.json"
+    out = args.bench_out
     out.write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
     print("\n| system | words: Devanagari | words: Roman | sentences: word acc | sentences: CER |")
     print("|---|---|---|---|---|")

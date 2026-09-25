@@ -176,18 +176,25 @@ an interrupted run can simply be re-launched with the same arguments.
 # data/translit_model/ -- the neural transliterator (model.pt + lexicon.json.gz)
 
 Trained by `training/translit/` (runbook: `training/translit/README.md`),
-loaded at runtime by `neural_translit.py` (provider id `neural`). No LLM
-output was used as training data -- every label is human-authored.
+loaded at runtime by `neural_translit.py` (provider id `neural`). The
+training labels are human-authored, with one exception: the rows taken from
+the exact dictionary (`data/translit_dictionary.tsv`, below), whose readings
+were reviewed and corrected in-session by Claude, not by a human linguist.
+No GPT output is used as training data.
 
 | Source | What we use | License / attribution |
 |---|---|---|
 | [kaikki.org](https://kaikki.org) Wiktionary extracts -- Urdu and Hindi dictionaries (wiktextract) | headwords, inflection tables, romanisations, Hindi/Urdu cross-spellings, usage examples | CC BY-SA 4.0 + GFDL, "Wiktionary contributors" |
 | [Aksharantar](https://huggingface.co/datasets/ai4bharat/Aksharantar) (AI4Bharat), Urdu split | ~700k Urdu word -> casual Roman pairs (auxiliary task, homograph tie-breaks) | CC BY 4.0, "AI4Bharat, Madhani et al. 2022" |
+| [Aksharantar](https://huggingface.co/datasets/ai4bharat/Aksharantar) (AI4Bharat), Hindi split | ~1M Hindi word -> casual Roman pairs: an Urdu and a Hindi word romanised alike, where the Hindi letters spell the Urdu word, give the Urdu word's vowelled reading (silver training pairs, `training/translit/silver.py`); `hindi_forms.json.gz` (runtime: prefer beam readings that are real Hindi words) | CC BY 4.0, "AI4Bharat, Madhani et al. 2022" |
+| [Hindi Wikipedia](https://hi.wikipedia.org) article titles and their Urdu interlanguage links (MediaWiki API) | ~56k title pairs; words that line up one to one and whose Hindi letters spell the Urdu word become silver pairs (names of people and places, mostly) | CC BY-SA 4.0, "Wikipedia contributors" |
 | [Dakshina](https://github.com/google-research-datasets/dakshina) (Google Research), Urdu | romanisation lexicon, 10k word-aligned romanised sentences (test split held out for eval), Wikipedia text as the attestation corpus for generated Urdu spellings | CC BY-SA 4.0, "Roark et al. 2020" |
+| `data/translit_dictionary.tsv` (this repo) | the reviewed readings of the 10,000 most frequent Urdu word forms, as training rows | see that section |
 
-`lexicon.json.gz` (Urdu spelling -> [Devanagari, R-reading]) and the model
-weights are derived works of the above and are offered under CC BY-SA 4.0.
-Rekhta or any other copyrighted poetry site was NOT used.
+`lexicon.json.gz` (Urdu spelling -> [Devanagari, R-reading]),
+`hindi_forms.json.gz` and the model weights are derived works of the above
+and are offered under CC BY-SA 4.0. Rekhta or any other copyrighted poetry
+site was NOT used.
 
 ---
 
@@ -227,3 +234,21 @@ python -m training.translit.build_dictionary build
 ```
 
 Add or edit lines in `dictionary_fixes.txt` and rebuild. Never hand-edit the TSV.
+
+# data/translit_model/gpt.json.gz -- GPT-distilled transliteration tables
+
+Built by `training/translit/gpt_distill.py` (runbook: `training/translit/README.md` §6).
+
+- **Input text:** Urdu Wikisource (ur.wikisource.org) pages with `<poem>`
+  blocks, mostly classical ghazals tagged `{{PD-old}}` (public domain; the
+  rest CC BY-SA 4.0), pulled via the MediaWiki API into
+  `data/translit_raw/wikisource_ur_poetry.jsonl`; plus Dakshina's Urdu
+  Wikipedia sentences (CC BY-SA). No rekhta.org text.
+- **Labels:** the replies of the app's own OpenAI transliteration call
+  (`providers/translit/gpt.py`: same model, `TEXT_SYSTEM` prompt, sampling),
+  cached in `data/translit_ds/gpt_labels.jsonl`. These are machine
+  transliterations, not human-reviewed; the tables exist to reproduce
+  the GPT column offline, not as a gold standard.
+- **Tables:** verbatim lines, per-script majority word spellings, context
+  readings (prev/next word), and word-pair joins, aligned word-by-word to
+  the Urdu (`align()` in the script).

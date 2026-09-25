@@ -11,6 +11,7 @@ urdu-free-toolkit/eval
 # training-only data (the shipped model lives in data/translit_model/)
 urdu-free-toolkit/data/translit_raw
 urdu-free-toolkit/data/translit_ds
+urdu-free-toolkit/data/translit_model/runs
 urdu-free-toolkit/data/lmdb
 urdu-free-toolkit/data/synth
 urdu-free-toolkit/.pytest_cache

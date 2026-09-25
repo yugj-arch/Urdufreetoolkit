@@ -373,6 +373,8 @@ def main(argv=None):
                     help="corpus count needed to accept a generated Urdu spelling")
     ap.add_argument("--test-frac", type=float, default=0.04)
     ap.add_argument("--dev-frac", type=float, default=0.02)
+    ap.add_argument("--no-silver", action="store_true",
+                    help="skip the Aksharantar Urdu x Hindi silver pairs (~10 min)")
     args = ap.parse_args(argv)
     OUT.mkdir(parents=True, exist_ok=True)
     rng = random.Random(7)
@@ -490,6 +492,18 @@ def main(argv=None):
             if x["voc"] != u:
                 add(split, "r", x["voc"], x["rich"], 0.5 * w)
 
+    # the reviewed exact dictionary (top 10k word forms): gold, and the most
+    # trusted reading of each word it covers. English loans whose plain Roman
+    # is overridden (school) keep only their phonetic R -> skipped here.
+    from training.translit.build_dictionary import entries as dictionary_entries
+    dict_words = set()
+    for u, deva, rich, plain, _ in dictionary_entries()[0]:
+        u = norm_urdu(u)
+        dict_words.add(u)
+        if u in held_all or " " in rich or to_plain(rich) != plain:
+            continue
+        add("train", "j", u, f"{rich}|{deva}", 3.0)
+
     for rich, deva in r2d.items():
         add("dev" if _bucket(rich) < 0.01 else "train", "h", rich, deva, 0.5)
 
@@ -521,10 +535,42 @@ def main(argv=None):
         (OUT / name).write_text(json.dumps({u: v for u, v in eng.items() if keep(u)},
                                            ensure_ascii=False, indent=0), encoding="utf-8")
 
+    # silver j pairs: Urdu words the gold sources don't cover, read through the
+    # Hindi word people romanise identically (training/translit/silver.py).
+    # Tier A (both sides human-backed, >=70% of romanisations agree) matches the
+    # gold reading ~90% of the time on words where gold exists; tier B ~84%.
+    n_silver = collections.Counter()
+    if not args.no_silver:
+        from training.translit.silver import WIKI_TITLES, silver_pairs, wiki_pairs
+        print("silver pairs ...", flush=True)
+        skip = set(votes) | held_all | dict_words
+        pairs = silver_pairs(casual_rows, skip=skip)
+        # Wikipedia title words (names above all): ~94% match gold where human
+        # romanisations back the reading, ~75% where none exist
+        if WIKI_TITLES.exists():
+            done = {p["urdu"] for p in pairs}
+            pairs += [dict(p, wiki=True) for p in wiki_pairs(casual_rows, skip=skip)
+                      if p["urdu"] not in done]
+        with open(OUT / "silver.tsv", "w", encoding="utf-8") as fh:
+            for p in pairs:
+                if p.get("wiki"):
+                    tier, w = ("W1", 1.0) if p["conf"] >= 0.5 else ("W2", 0.5)
+                elif p["dw"] >= 1.0 and p["uw"] >= 1.0 and p["conf"] >= 0.7:
+                    tier, w = "A", 1.0
+                elif p["dw"] >= 1.0 and p["conf"] >= 0.5:
+                    tier, w = "B", 0.5
+                else:
+                    continue
+                if len(p["urdu"]) > 40 or len(p["rich"]) + len(p["deva"]) > 59:
+                    continue
+                n_silver[tier] += 1
+                fh.write(f"j\t{p['urdu']}\t{p['rich']}|{p['deva']}\t{w:.2f}\n")
+
     stats = {"attested_tokens": len(att), "evidence_words": len(ev_json),
              "english_words": len(eng), "r2d": len(r2d), "urdu_wikt_rows": len(gold),
              "hindi_wikt_rows": len(hi), "casual_rows": n_c,
-             "lexicon_full": len(lex_full), "lexicon_train": len(lex_train), "test_words": len(test)}
+             "lexicon_full": len(lex_full), "lexicon_train": len(lex_train), "test_words": len(test),
+             "dictionary_words": len(dict_words), "silver": dict(n_silver)}
     for split, c in samples.items():
         with open(OUT / f"{split}.tsv", "w", encoding="utf-8") as fh:
             for (task, src, tgt), w in c.items():

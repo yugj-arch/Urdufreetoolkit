@@ -83,10 +83,13 @@ def test_deva_to_urdu_candidates_contains_real_spelling(deva, urdu):
 
 @pytest.fixture(scope="module")
 def engine():
+    """The engine's own tiers, without the GPT-distilled tables (those are
+    tested in test_translit_gpt_tier.py): this is what reads every word
+    GPT's data hasn't seen."""
     import neural_translit
     if not neural_translit.LEXICON_PATH.exists():
         pytest.skip("neural model files not built")
-    return neural_translit.get_engine()
+    return neural_translit.NeuralTransliterator(gpt_path=None)
 
 
 def test_keeps_lines_punctuation_digits_and_latin(engine):
@@ -168,6 +171,44 @@ def test_works_without_model_file(tmp_path):
     deva, plain, dia = eng.transliterate("محبت اور زندگی")
     assert plain.split()[1] == "aur"
     assert not any("؀" <= ch <= "ۿ" for ch in deva + plain + dia)
+
+
+# -- beam reranking ------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def bare(tmp_path_factory):
+    """An engine with no model or tables: just the reranker."""
+    import neural_translit
+    d = tmp_path_factory.mktemp("bare")
+    return neural_translit.NeuralTransliterator(
+        model_path=d / "none.pt", lexicon_path=d / "none", evidence_path=None, english_path=None,
+        dictionary_path=None, gpt_path=None, hindi_forms_path=None)
+
+
+# the model's own favourite first: a no-word reading of چکیوں
+BEAM = [("cukiyo~|चुकियों", -0.40), ("cakkiyo~|चक्कियों", -0.55)]
+
+
+def test_rerank_keeps_the_model_order_without_signals(bare):
+    assert bare._rerank(BEAM, None, None, None) == BEAM[0][0]
+
+
+def test_rerank_prefers_a_real_hindi_word(bare):
+    # table keys are hindi_fold'ed: nukta / nasal / virama blind
+    from urdu_nn.scheme import hindi_fold
+    assert hindi_fold("चक्कियों") == hindi_fold("चककियों")
+    assert bare._rerank(BEAM, None, None, {hindi_fold("चक्कियों")}) == BEAM[1][0]
+
+
+def test_rerank_follows_human_romanisations(bare):
+    assert bare._rerank(BEAM, {"chakkiyon": 3.0}, None, None) == BEAM[1][0]
+
+
+def test_rerank_uses_casual_beam_when_no_human_evidence(bare):
+    casual = [("chakkiyon", -0.1), ("chukiyon", -3.0)]
+    assert bare._rerank(BEAM, None, casual, None) == BEAM[1][0]
+    # human evidence, when there is some, is what counts
+    assert bare._rerank(BEAM, {"chukiyon": 3.0}, casual, None) == BEAM[0][0]
 
 
 # -- provider ----------------------------------------------------------------

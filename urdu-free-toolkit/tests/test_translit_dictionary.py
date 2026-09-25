@@ -160,7 +160,8 @@ def neural(tmp_path_factory):
                  "میں\tमें\tmein\tmeñ\n"
                  "کافی\tकाफ़ी\tkaafi\tkāfī\n", encoding="utf-8")
     return neural_translit.NeuralTransliterator(
-        model_path=tmp_path_factory.mktemp("m") / "missing.pt", dictionary_path=p)
+        model_path=tmp_path_factory.mktemp("m") / "missing.pt", dictionary_path=p,
+        gpt_path=None)
 
 
 def test_neural_uses_dictionary_verbatim(neural):
