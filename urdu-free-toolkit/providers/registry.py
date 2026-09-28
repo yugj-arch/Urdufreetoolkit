@@ -108,7 +108,10 @@ def for_ui(capability: Capability | None = None, include_hidden: bool = False) -
     for p in reg.values():
         if capability is not None and p.info.capability != capability:
             continue
-        ok, reason = p.available()
+        try:
+            ok, reason = p.available()
+        except Exception as e:  # one broken check must not 500 the whole picker
+            ok, reason = False, f"{type(e).__name__}: {e}"
         rows.append({
             "id": p.info.id,
             "label": p.info.label,
