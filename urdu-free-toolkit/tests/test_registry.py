@@ -41,6 +41,17 @@ def test_for_ui_badges():
     assert rows["fake_no"]["reason"] == "FAKE_KEY not set"
 
 
+def test_for_ui_survives_a_provider_whose_check_raises():
+    # One engine's broken availability check must grey that engine out, not
+    # 500 the whole /api/providers list.
+    registry.discover(package="tests.fakes")
+    rows = {r["id"]: r for r in registry.for_ui(Capability.OCR)}
+    assert rows["fake_broken"]["available"] is False
+    assert rows["fake_broken"]["badge"] == "not installed"
+    assert "torch_not_installed_anywhere" in rows["fake_broken"]["reason"]
+    assert rows["fake_ok"]["available"] is True
+
+
 def test_for_ui_filters_by_capability():
     registry.discover(package="tests.fakes")
     rows = registry.for_ui(Capability.OCR)

@@ -31,15 +31,17 @@ class RekhtaTranslit(BaseProvider):
     )
 
     def available(self) -> tuple[bool, str]:
+        # torch first: rekhta_teacher imports it at module level, and the
+        # Vercel build has none.
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            return False, "needs torch"
         import rekhta_translit
         from urdu_nn import rekhta_teacher
         teacher = rekhta_teacher.MODELS / "ur-2-hi" / rekhta_teacher.FILES["ur2hi"][2]
         if not (rekhta_translit.MODEL_PATH.exists() or teacher.exists()):
             return False, "model files missing (data/rekhta_model/)"
-        try:
-            import torch  # noqa: F401
-        except ImportError:
-            return False, "needs torch"
         return True, ""
 
     def translit(self, text: str, opts: TranslitOpts) -> TranslitResult:
