@@ -4,8 +4,9 @@
 A label is kept only when it is structurally sound and both of Rekhta's
 models agree on it:
 
-* one Devanagari word per Urdu word (izafat -ए- is a joiner, not a word;
-  the conjunctive -ओ- *is* the Urdu و), so nothing was dropped or looped;
+* its words line up with the Urdu words (``align_units``: one to one, or
+  Rekhta's joins पाऊँगा / गुलज़ार and splits सर-बसर; izafat -ए- is a joiner,
+  the conjunctive -ओ- is the Urdu و), so nothing was dropped or looped;
 * the reverse model (Devanagari -> Urdu) gives back nearly the same Urdu
   (``--min-back`` similarity), so the teacher read the words that are there.
 
@@ -24,7 +25,7 @@ import re
 import sys
 import unicodedata
 
-from urdu_nn.rekhta_roman import deva_units
+from urdu_nn.rekhta_roman import deva_units, reading_ok
 from urdu_nn.rekhta_text import ZER, norm_word
 from training.rekhta.label import DS, LABELS
 
@@ -50,18 +51,7 @@ def _nb(s: str) -> str:
 
 def check(row: dict, min_back: float) -> str:
     """"" if the label is kept, else the reason it isn't."""
-    from rapidfuzz.distance import Levenshtein
-    ur, hi = row["ur"], row["hi"]
-    if not hi or len(hi) > 2 * len(ur) + 12:
-        return "length"
-    if any(c.isascii() and c.isalpha() for c in hi):
-        return "latin"
-    if len(deva_units(hi)) != len(ur.split()):
-        return "words"
-    back, want = _nb(row["back"]), _nb(ur)
-    if back != want and Levenshtein.normalized_similarity(back, want) < min_back:
-        return "roundtrip"
-    return ""
+    return reading_ok(row["ur"], row["hi"], row["back"], min_back)
 
 
 def load_split(split: str) -> list[tuple[str, str, str, bool, bool]]:

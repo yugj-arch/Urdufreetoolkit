@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import threading
 
 from providers.base import BaseProvider, Capability
 
 _cache: dict[str, BaseProvider] | None = None
+# app.py warms discovery on a thread while requests may call it too; two threads
+# importing torch & co. at once can trip Python's import-deadlock guard, which
+# surfaces as ImportError and would silently drop that provider.
+_lock = threading.Lock()
 
 
 def reset_cache() -> None:
@@ -46,6 +51,11 @@ def _iter_module_names(package: str):
 def discover(package: str = "providers") -> dict[str, BaseProvider]:
     """Return ``{"<capability>:<id>": provider}``. Cached for the default package
     (and for the first non-default package, so tests can pin a fake set)."""
+    with _lock:
+        return _discover(package)
+
+
+def _discover(package: str) -> dict[str, BaseProvider]:
     global _cache
     if _cache is not None and package == "providers":
         return _cache

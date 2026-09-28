@@ -70,6 +70,14 @@ def api_providers():
     return jsonify({c.value: registry.for_ui(c) for c in Capability})
 
 
+@app.post("/api/client-log")
+def api_client_log():
+    """The page reports its own load failures here (via sendBeacon, which works
+    even when fetch doesn't), so they show in the server log."""
+    app.logger.warning("client: %s", request.get_data(as_text=True)[:2000])
+    return ("", 204)
+
+
 @app.post("/api/ocr")
 def api_ocr():
     """Multipart: `image`, `providers` (comma list). Streams one SSE `data:`
@@ -194,6 +202,33 @@ def api_settings_post():
     saved = settings.save({k: v for k, v in data.items() if isinstance(v, str)})
     registry.reset_cache()
     return jsonify({"saved": saved, "readonly": False})
+
+
+@app.get("/api/corrections")
+def api_corrections_get():
+    """Reviewed word fixes the Rekhta-style engine always applies."""
+    import rekhta_translit
+    return jsonify({"corrections": [
+        {"urdu": u, "devanagari": d} for u, (d, _) in rekhta_translit.load_corrections().items()]})
+
+
+@app.post("/api/corrections")
+def api_corrections_post():
+    """JSON `urdu`, `devanagari`, optional `roman` (Rekhta's ASCII table:
+    KHauf, pa.Dhaa.ii). Saved to data/rekhta_corrections.tsv; from then on the
+    Rekhta-style engine uses it for that word, everywhere, over any model."""
+    if config.settings_readonly():
+        return jsonify({"saved": False, "readonly": True,
+                        "message": "The deployed site can't save corrections."}), 409
+    data = request.get_json(force=True) or {}
+    urdu = (data.get("urdu") or "").strip()
+    deva = (data.get("devanagari") or "").strip()
+    roman = (data.get("roman") or "").strip()
+    if not urdu or not deva or len(urdu.split()) != 1:
+        return jsonify({"saved": False, "error": "Need one Urdu word and its Devanagari."}), 400
+    import rekhta_translit
+    rekhta_translit.save_correction(urdu, deva, roman)
+    return jsonify({"saved": True, "readonly": False})
 
 
 if __name__ == "__main__":

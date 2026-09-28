@@ -28,11 +28,13 @@ import re
 import threading
 from pathlib import Path
 
-from urdu_nn.rekhta_roman import Reader, WordModel, deva_units, render
+from urdu_nn.rekhta_roman import (Reader, WordModel, align_units, deva_units, reading_ok,
+                                  render)
 from urdu_nn.rekhta_text import segments
 
 ROOT = Path(__file__).resolve().parent
 MODEL_PATH = ROOT / "data" / "rekhta_model" / "model.pt"
+CORRECTIONS_PATH = ROOT / "data" / "rekhta_corrections.tsv"
 WORD_DIR = ROOT / "data" / "translit_model"
 _DIGITS = {ord(a): str(i) for i, a in enumerate("۰۱۲۳۴۵۶۷۸۹")}
 _DIGITS.update({ord(a): str(i) for i, a in enumerate("٠١٢٣٤٥٦٧٨٩")})
@@ -62,7 +64,8 @@ class LineModel:
         self.max_len = ck["cfg"].get("max_len", 128) - 2
         self.info = {"epoch": ck.get("epoch"), "dev": ck.get("dev_beam4") or ck.get("dev")}
 
-    def __call__(self, runs: list[str]) -> list[str]:
+    def nbest(self, runs: list[str]) -> list[list[tuple[str, float]]]:
+        """Per run, the beam's readings best-first as (text, normalised logprob)."""
         import torch
         from urdu_nn.model import UNK, beam_search, pad_batch
         tag = self.vocab.stoi["<l>"]
@@ -73,20 +76,149 @@ class LineModel:
                             self.device)
             with torch.inference_mode():
                 hyps = beam_search(self.model, src, beam=self.beam, max_len=self.max_len)
-            out += [self.vocab.decode(h[0][0]) for h in hyps]
+            out += [[(self.vocab.decode(ids), sc) for ids, sc in h] for h in hyps]
         return out
+
+    def __call__(self, runs: list[str]) -> list[str]:
+        return [h[0][0] for h in self.nbest(runs)]
+
+
+def _clean(deva: str) -> str:
+    return re.sub(r"\s+", " ", deva).strip()
+
+
+def _lines_up(run: str, deva: str) -> bool:
+    return align_units(run.split(), deva_units(deva)) is not None
+
+
+class Ensemble:
+    """Rekhta's reading, verbatim, wherever it is sound; our model where it breaks.
+
+    Rekhta's forward model reads the run and its reverse model reads that
+    Devanagari back into Urdu. If the reading passes ``reading_ok`` -- the
+    same test that picked our training labels: its words line up with the
+    Urdu, nothing looped, and it reads back as the Urdu written -- it is
+    the answer, unchanged. Otherwise (a loop, a dropped, doubled or misread
+    word) our model's beam joins in and every candidate is scored by the
+    read-back log P(urdu | devanagari), plus a small weight on our model's
+    own score."""
+
+    def __init__(self, student: LineModel, fwd, back, prior: float = 0.3, margin: float = 0.3):
+        self.student, self.fwd, self.back = student, fwd, back
+        self.prior, self.margin = prior, margin
+        self.stats = {"rekhta": 0, "refereed": 0}
+
+    def choose(self, runs: list[str]) -> list[str]:
+        out: list[str | None] = [None] * len(runs)
+        tg = [_clean(t) for t in self.fwd(runs)]
+        backs = self.back(tg)
+        for i, (r, t, b) in enumerate(zip(runs, tg, backs)):
+            if not reading_ok(r, t, b):
+                out[i] = t
+        ok = [i for i, (r, t) in enumerate(zip(runs, tg)) if out[i] is None and t and _lines_up(r, t)]
+        lps = self.back.logprob([tg[i] for i in ok], [runs[i] for i in ok]) if ok else []
+        t_lp = dict(zip(ok, lps))
+        todo = [i for i in range(len(runs)) if out[i] is None]
+        self.stats["rekhta"] += len(runs) - len(todo)
+        self.stats["refereed"] += len(todo)
+        if not todo:
+            return out
+        nb = self.student.nbest([runs[i] for i in todo])
+        flat: list[tuple[int, str, float]] = []
+        for i, hyps in zip(todo, nb):
+            seen: dict[str, float] = {}
+            for h, s in hyps:
+                h = _clean(h)
+                if h and _lines_up(runs[i], h):
+                    seen.setdefault(h, s)
+            if not seen:                            # nothing lines up: our best guess stands
+                out[i] = _clean(hyps[0][0]) if hyps else tg[i]
+                continue
+            flat += [(i, c, s) for c, s in seen.items()]
+        lps = self.back.logprob([c for _, c, _ in flat], [runs[i] for i, _, _ in flat]) if flat else []
+        best: dict[int, tuple[float, str, float]] = {}
+        for (i, c, s), lp in zip(flat, lps):
+            sc = lp + self.prior * s
+            if i not in best or sc > best[i][0]:
+                best[i] = (sc, c, lp)
+        for i in todo:
+            if out[i] is None:
+                _, cand, lp = best[i]
+                # the read-back can't hear short vowels (सताए and सिताए both read
+                # back as ستائے): Rekhta's reading only loses when it reads back
+                # clearly worse -- a dropped, doubled or misread word
+                if i in t_lp and t_lp[i] >= lp - self.margin:
+                    cand = tg[i]
+                out[i] = cand
+        return out
+
+    __call__ = choose
+
+
+def load_corrections(path: Path = None) -> dict[str, tuple[str, str]]:
+    """Reviewed fixes: urdu word -> (devanagari, R or ""). File lines are
+    ``urdu <TAB> devanagari [<TAB> roman in Rekhta's ASCII table]``."""
+    path = path or CORRECTIONS_PATH
+    out: dict[str, tuple[str, str]] = {}
+    if not Path(path).exists():
+        return out
+    from urdu_nn.rekhta_roman import ascii_to_rich
+    from urdu_nn.rekhta_text import norm_word
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0].strip() and parts[1].strip():
+            rich = ascii_to_rich(parts[2].strip()) if len(parts) > 2 and parts[2].strip() else ""
+            out[norm_word(parts[0].strip())] = (parts[1].strip(), rich)
+    return out
+
+
+def save_correction(urdu: str, deva: str, roman_ascii: str = "", path: Path = None) -> None:
+    """Add or replace one fix (the newest line for a word wins)."""
+    from urdu_nn.rekhta_text import norm_word
+    path = Path(path or CORRECTIONS_PATH)
+    key = norm_word(urdu.strip())
+    keep = []
+    if path.exists():
+        keep = [l for l in path.read_text(encoding="utf-8").splitlines()
+                if not l.strip() or l.startswith("#") or norm_word(l.split("\t")[0].strip()) != key]
+    else:
+        keep = ["# urdu <TAB> devanagari [<TAB> roman in Rekhta's ASCII table] -- always wins"]
+    keep.append("\t".join([key, deva.strip()] + ([roman_ascii.strip()] if roman_ascii.strip() else [])))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(keep) + "\n", encoding="utf-8")
+    eng = _ENGINE
+    if eng is not None:
+        eng.corrections = load_corrections(path)
+        eng._cache.clear()
 
 
 class RekhtaTransliterator:
+    """``mode``: "ensemble" (our model + Rekhta's, refereed by the reverse
+    model; the default when both are present), "student" or "teacher"."""
+
     def __init__(self, model_path: Path = MODEL_PATH, device: str = "cpu", beam: int = 4,
-                 word_dir: Path = WORD_DIR, use_teacher: bool | None = None):
+                 word_dir: Path = WORD_DIR, use_teacher: bool | None = None,
+                 mode: str | None = None, corrections_path: Path | None = None):
         import torch
         torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
-        if use_teacher or (use_teacher is None and not Path(model_path).exists()):
-            from urdu_nn.rekhta_teacher import Teacher
-            self.model, self.source = Teacher("ur2hi", device), "rekhtalabs/ur-2-hi-translit"
+        from urdu_nn import rekhta_teacher as rt
+        have_student = Path(model_path).exists()
+        have_teacher = (rt.MODELS / "ur-2-hi" / rt.FILES["ur2hi"][2]).exists()
+        if use_teacher:
+            mode = "teacher"
+        mode = mode or ("ensemble" if have_student and have_teacher
+                        else "student" if have_student else "teacher")
+        if mode == "teacher":
+            self.model = rt.Teacher("ur2hi", device)
+        elif mode == "student":
+            self.model = LineModel(Path(model_path), device, beam)
         else:
-            self.model, self.source = LineModel(Path(model_path), device, beam), "rekhta-line"
+            self.model = Ensemble(LineModel(Path(model_path), device, beam),
+                                  rt.Teacher("ur2hi", device), rt.Teacher("hi2ur", device))
+        self.mode = mode
+        self.corrections = load_corrections(corrections_path)
         self.reader = Reader(*self._tables(word_dir))
         self._lock = threading.Lock()
         self._cache: dict[str, str] = {}
@@ -121,22 +253,40 @@ class RekhtaTransliterator:
         return {r: self._cache[r] for r in runs}
 
     def _read_run(self, run: str, deva: str) -> tuple[str, str]:
-        """(Devanagari, R) for one run. When the model's words don't line up
-        one-to-one with the Urdu words, every word is read on its own."""
+        """(Devanagari, R) for one run. The model's words are lined up with
+        the Urdu words (one to one, or Rekhta's joins पाऊँगा and splits
+        सर-बसर); if they can't be, every word is read on its own. A reviewed
+        correction replaces whatever the model said for that word."""
         words = run.split()
         units = deva_units(deva)
-        if len(units) != len(words):
+        spans = align_units(words, units)
+        if spans is None:
             singles = self.deva(words)
-            units = []
-            for w in words:
-                u = deva_units(singles[w]) or [[singles[w], " "]]
-                units.append([u[0][0], " "])
+            units = [[(deva_units(singles[w]) or [[singles[w], " "]])[0][0], " "] for w in words]
+            spans = [(i, i + 1, i, i + 1) for i in range(len(words))]
             deva = " ".join(u[0] for u in units)
-        rich = []
-        for k, ((dw, join), uw) in enumerate(zip(units, words)):
-            rich.append(self.reader.read(dw, uw))
-            if k < len(units) - 1:
-                rich.append(join)
+        rich, fixed = [], False
+        for n, (i0, i1, j0, j1) in enumerate(spans):
+            urdu = "".join(words[i0:i1])
+            fix = (self.corrections.get(words[i0]) or self.corrections.get(words[i0].rstrip("ِ"))
+                   if i1 - i0 == 1 else None)
+            if fix:
+                units[j0][0] = fix[0]
+                for k in range(j0 + 1, j1):          # the fix replaces a hyphenated pair too
+                    units[k][0] = ""
+                units[j0][1] = units[j1 - 1][1]
+                fixed = True
+                r = fix[1] or self.reader.read(fix[0], urdu)
+            else:                                     # सर-बसर: each half read on its own
+                r = "-".join(self.reader.read(units[k][0], urdu) if j1 - j0 == 1
+                             else self.reader.read(units[k][0], "") for k in range(j0, j1))
+            rich.append(r)
+            if n < len(spans) - 1:
+                rich.append(units[j1 - 1][1])
+        if fixed:
+            live = [u for u in units if u[0]]
+            deva = "".join(u[0] + (u[1].replace("-e-", "-ए-") if k < len(live) - 1 else "")
+                           for k, u in enumerate(live))
         return deva, "".join(rich)
 
     def transliterate_full(self, text: str) -> dict[str, str]:

@@ -155,3 +155,39 @@ def test_provider_is_registered():
     from providers import registry
     from providers.base import Capability
     assert registry.get(Capability.TRANSLIT, "rekhta").info.kind == "offline"
+
+
+# -- reviewed corrections: fixed once, right everywhere --------------------------
+
+def test_ascii_table_parses_back_to_r():
+    for a in ("KHauf-e-rasan", "pa.Dhaa.ii", "aañkh", "kuchh", "chain", "Gam", "Thokar", "ko.ii"):
+        assert rr.render(rr.ascii_to_rich(a), "ascii") == a
+
+
+def test_corrections_file_round_trip(tmp_path):
+    import rekhta_translit as rt
+    p = tmp_path / "fix.tsv"
+    rt.save_correction("مرقع", "मुरक़्क़अ'", "muraqqa'", path=p)
+    rt.save_correction("مُرقّع", "मुरक़्क़ा", path=p)          # same word (harakat fold): replaces
+    assert rt.load_corrections(p) == {"مرقع": ("मुरक़्क़ा", "")}
+
+
+def test_api_saves_a_correction(tmp_path, monkeypatch):
+    import app as app_mod
+    import rekhta_translit as rt
+    monkeypatch.setattr(rt, "CORRECTIONS_PATH", tmp_path / "fix.tsv")
+    c = app_mod.app.test_client()
+    r = c.post("/api/corrections", json={"urdu": "خوف", "devanagari": "ख़ौफ़", "roman": "KHauf"})
+    assert r.get_json()["saved"] is True
+    assert c.get("/api/corrections").get_json()["corrections"] == [{"urdu": "خوف", "devanagari": "ख़ौफ़"}]
+    assert c.post("/api/corrections", json={"urdu": "دو لفظ", "devanagari": "x"}).status_code == 400
+
+
+def test_engine_applies_a_correction_over_the_model(teacher, tmp_path):
+    import rekhta_translit as rt
+    p = tmp_path / "fix.tsv"
+    rt.save_correction("رسن", "रसन्न", "rasann", path=p)
+    eng = rt.RekhtaTransliterator(mode="teacher", corrections_path=p)
+    r = eng.transliterate_full("وسوسے دل میں نہ رکھ خوف رسن لے کے نہ چل")
+    assert "ख़ौफ़-ए-रसन्न" in r["devanagari"]
+    assert "KHauf-e-rasann" in r["roman"]
