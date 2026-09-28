@@ -157,17 +157,6 @@ def test_provider_is_registered():
     assert registry.get(Capability.TRANSLIT, "rekhta").info.kind == "offline"
 
 
-def test_provider_without_torch_reports_unavailable(monkeypatch):
-    # The Vercel build has no torch: the check must say so, not raise.
-    import sys
-    import urdu_nn
-    from providers.translit.rekhta import PROVIDER
-    monkeypatch.setitem(sys.modules, "torch", None)   # `import torch` -> ImportError
-    monkeypatch.delitem(sys.modules, "urdu_nn.rekhta_teacher", raising=False)
-    monkeypatch.delattr(urdu_nn, "rekhta_teacher", raising=False)
-    assert PROVIDER.available() == (False, "needs torch")
-
-
 # -- reviewed corrections: fixed once, right everywhere --------------------------
 
 def test_ascii_table_parses_back_to_r():

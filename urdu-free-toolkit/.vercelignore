@@ -11,6 +11,13 @@ pytest.ini
 .pytest_cache/
 __pycache__/
 
+# Local-only checkpoints (git ignores them too) -- keeps a `vercel` CLI deploy
+# under the function size limit. Rekhta Labs' models are fetched at runtime.
+/data/rekhta_models/
+/data/rekhta_model/*
+!/data/rekhta_model/model.pt
+/data/translit_model/model_*.pt
+
 # Never ship secrets; the example stays
 .env
 .env.*

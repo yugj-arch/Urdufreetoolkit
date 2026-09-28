@@ -31,16 +31,14 @@ class RekhtaTranslit(BaseProvider):
     )
 
     def available(self) -> tuple[bool, str]:
-        # torch first: rekhta_teacher imports it at module level, and the
-        # Vercel build has none.
+        # runs on torch when installed, else on numpy (the Vercel build)
         try:
-            import torch  # noqa: F401
+            import numpy  # noqa: F401
         except ImportError:
-            return False, "needs torch"
+            return False, "needs numpy"
         import rekhta_translit
-        from urdu_nn import rekhta_teacher
-        teacher = rekhta_teacher.MODELS / "ur-2-hi" / rekhta_teacher.FILES["ur2hi"][2]
-        if not (rekhta_translit.MODEL_PATH.exists() or teacher.exists()):
+        from urdu_nn.rekhta_models import model_dir
+        if not (rekhta_translit.MODEL_PATH.exists() or model_dir("ur2hi")):
             return False, "model files missing (data/rekhta_model/)"
         return True, ""
 

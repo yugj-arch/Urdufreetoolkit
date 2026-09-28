@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import re
 import threading
 from pathlib import Path
@@ -32,6 +33,7 @@ from urdu_nn.rekhta_roman import (Reader, WordModel, align_units, deva_units, re
                                   render)
 from urdu_nn.rekhta_text import segments
 
+log = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent
 MODEL_PATH = ROOT / "data" / "rekhta_model" / "model.pt"
 CORRECTIONS_PATH = ROOT / "data" / "rekhta_corrections.tsv"
@@ -48,34 +50,26 @@ def _punct(text: str, table: dict) -> str:
 
 
 class LineModel:
-    """Our trained line model (``training/rekhta/train.py``)."""
+    """Our trained line model (``training/rekhta/train.py``); torch when
+    installed, else the numpy runtime (``urdu_nn.npnn``)."""
 
     def __init__(self, path: Path, device: str = "cpu", beam: int = 4):
-        import torch
-        from urdu_nn.model import Seq2Seq, Vocab
-        ck = torch.load(path, map_location=device, weights_only=False)
-        self.vocab = Vocab([])
-        self.vocab.itos = ck["itos"]
-        self.vocab.stoi = {s: i for i, s in enumerate(self.vocab.itos)}
-        self.model = Seq2Seq(**ck["cfg"])
-        self.model.load_state_dict({k: v.float() for k, v in ck["state"].items()})
-        self.model.to(device).eval()
-        self.device, self.beam = device, beam
-        self.max_len = ck["cfg"].get("max_len", 128) - 2
+        from urdu_nn.npnn import Checkpoint
+        self.net = Checkpoint(path, device)
+        self.vocab, self.beam = self.net.vocab, beam
+        self.max_len = self.net.cfg.get("max_len", 128) - 2
+        ck = self.net.meta
         self.info = {"epoch": ck.get("epoch"), "dev": ck.get("dev_beam4") or ck.get("dev")}
 
     def nbest(self, runs: list[str]) -> list[list[tuple[str, float]]]:
         """Per run, the beam's readings best-first as (text, normalised logprob)."""
-        import torch
-        from urdu_nn.model import UNK, beam_search, pad_batch
+        from urdu_nn.vocab import UNK
         tag = self.vocab.stoi["<l>"]
         out = []
         for b in range(0, len(runs), 64):
             chunk = runs[b:b + 64]
-            src = pad_batch([[tag] + [self.vocab.stoi.get(c, UNK) for c in r] for r in chunk],
-                            self.device)
-            with torch.inference_mode():
-                hyps = beam_search(self.model, src, beam=self.beam, max_len=self.max_len)
+            hyps = self.net.beam_search([[tag] + [self.vocab.stoi.get(c, UNK) for c in r] for r in chunk],
+                                        beam=self.beam, max_len=self.max_len)
             out += [[(self.vocab.decode(ids), sc) for ids, sc in h] for h in hyps]
         return out
 
@@ -201,22 +195,32 @@ class RekhtaTransliterator:
     def __init__(self, model_path: Path = MODEL_PATH, device: str = "cpu", beam: int = 4,
                  word_dir: Path = WORD_DIR, use_teacher: bool | None = None,
                  mode: str | None = None, corrections_path: Path | None = None):
-        import torch
-        torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
-        from urdu_nn import rekhta_teacher as rt
+        from urdu_nn.npnn import use_torch
+        from urdu_nn.rekhta_models import load_teacher
+        if use_torch():
+            import torch
+            torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
         have_student = Path(model_path).exists()
-        have_teacher = (rt.MODELS / "ur-2-hi" / rt.FILES["ur2hi"][2]).exists()
         if use_teacher:
             mode = "teacher"
-        mode = mode or ("ensemble" if have_student and have_teacher
-                        else "student" if have_student else "teacher")
+        teachers = None
+        if mode in (None, "ensemble") and have_student:
+            # Rekhta's models aren't ours to ship, so a fresh checkout or the
+            # deployed site fetches them here; if that fails, ours reads alone
+            try:
+                teachers = load_teacher("ur2hi", device), load_teacher("hi2ur", device)
+            except Exception as e:
+                if mode == "ensemble":
+                    raise
+                log.warning("Rekhta's models unavailable (%s); line model only", e)
+            mode = "ensemble" if teachers else "student"
+        mode = mode or "teacher"
         if mode == "teacher":
-            self.model = rt.Teacher("ur2hi", device)
+            self.model = load_teacher("ur2hi", device)
         elif mode == "student":
             self.model = LineModel(Path(model_path), device, beam)
         else:
-            self.model = Ensemble(LineModel(Path(model_path), device, beam),
-                                  rt.Teacher("ur2hi", device), rt.Teacher("hi2ur", device))
+            self.model = Ensemble(LineModel(Path(model_path), device, beam), *teachers)
         self.mode = mode
         self.corrections = load_corrections(corrections_path)
         self.reader = Reader(*self._tables(word_dir))

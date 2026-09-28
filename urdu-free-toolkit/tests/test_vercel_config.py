@@ -127,7 +127,8 @@ def test_api_index_reexports_the_flask_app():
 
 def test_api_requirements_is_the_minimal_deploy_set():
     req = (ROOT / "api" / "requirements.txt").read_text(encoding="utf-8").lower()
-    for pkg in ("flask", "pillow", "openai", "python-dotenv"):
+    for pkg in ("flask", "pillow", "openai", "python-dotenv",
+                "numpy", "sentencepiece", "rapidfuzz"):     # the offline translit engines
         assert pkg in req, f"{pkg} missing from api/requirements.txt"
     # heavy offline engines must NOT be pulled into the serverless bundle
     for heavy in ("torch", "easyocr", "surya", "paddle", "transformers"):
