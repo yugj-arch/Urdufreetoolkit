@@ -165,19 +165,15 @@ class NeuralTransliterator:
                 self.model = None
 
     def _load_model(self, model_path: Path):
-        import torch
-        from urdu_nn.model import TASK_TOKEN, Seq2Seq, Vocab
-        ck = torch.load(model_path, map_location=self.device, weights_only=False)
-        if "<h>" not in ck["itos"] or TASK_TOKEN.get("h") != "<h>":
+        from urdu_nn.npnn import Checkpoint      # torch when installed, else numpy
+        from urdu_nn.vocab import TASK_TOKEN
+        net = Checkpoint(model_path, self.device)
+        if "<h>" not in net.vocab.itos or TASK_TOKEN.get("h") != "<h>":
             raise ValueError("model file predates the R|devanagari layout")
-        vocab = Vocab([])
-        vocab.itos = ck["itos"]
-        vocab.stoi = {s: i for i, s in enumerate(vocab.itos)}
-        model = Seq2Seq(**ck["cfg"])
-        model.load_state_dict({k: v.float() for k, v in ck["state"].items()})
-        model.eval()
-        self.model, self.vocab = model.to(self.device), vocab
-        torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
+        self.model, self.vocab = net, net.vocab
+        if net.torch:
+            import torch
+            torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
 
     @property
     def has_model(self) -> bool:
@@ -195,13 +191,12 @@ class NeuralTransliterator:
         todo = [s for s in dict.fromkeys(sources)
                 if (task, s) not in self._cache and all(c in self.vocab.stoi for c in s)]
         if todo:
-            import torch
-            from urdu_nn.model import beam_search, pad_batch
-            with self._lock, torch.inference_mode():
+            with self._lock:
                 for i in range(0, len(todo), 64):
                     chunk = todo[i:i + 64]
-                    src = pad_batch([self.vocab.encode_src(task, s) for s in chunk], self.device)
-                    for s, hyps in zip(chunk, beam_search(self.model, src, beam=self.beam)):
+                    hyps_all = self.model.beam_search([self.vocab.encode_src(task, s) for s in chunk],
+                                                      beam=self.beam, max_len=64)
+                    for s, hyps in zip(chunk, hyps_all):
                         texts = [(self.vocab.decode(ids), sc) for ids, sc in hyps]
                         self._cache[(task, s)] = [(t, sc) for t, sc in texts if valid(t)]
         for s in sources:

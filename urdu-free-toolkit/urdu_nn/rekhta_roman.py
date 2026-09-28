@@ -150,29 +150,19 @@ class WordModel:
     an Urdu word, with probabilities."""
 
     def __init__(self, path, device: str = "cpu", beam: int = 5):
-        import torch
-        from urdu_nn.model import Seq2Seq, Vocab
-        ck = torch.load(path, map_location=device, weights_only=False)
-        self.vocab = Vocab([])
-        self.vocab.itos = ck["itos"]
-        self.vocab.stoi = {s: i for i, s in enumerate(self.vocab.itos)}
-        self.model = Seq2Seq(**ck["cfg"])
-        self.model.load_state_dict({k: v.float() for k, v in ck["state"].items()})
-        self.model.to(device).eval()
-        self.device, self.beam = device, beam
+        from urdu_nn.npnn import Checkpoint      # torch when installed, else numpy
+        self.net = Checkpoint(path, device)
+        self.vocab, self.beam = self.net.vocab, beam
         self._cache: dict[str, list[tuple[str, float]]] = {}
 
     def readings(self, words: list[str]) -> dict[str, list[tuple[str, float]]]:
         import math
-        import torch
-        from urdu_nn.model import beam_search, pad_batch
         todo = [w for w in dict.fromkeys(words) if w not in self._cache
                 and all(c in self.vocab.stoi for c in w)]
         for b in range(0, len(todo), 64):
             chunk = todo[b:b + 64]
-            src = pad_batch([self.vocab.encode_src("j", w) for w in chunk], self.device)
-            with torch.inference_mode():
-                beams = beam_search(self.model, src, beam=self.beam, max_len=64)
+            beams = self.net.beam_search([self.vocab.encode_src("j", w) for w in chunk],
+                                         beam=self.beam, max_len=64)
             for w, hyps in zip(chunk, beams):
                 got = []
                 for ids, sc in hyps:

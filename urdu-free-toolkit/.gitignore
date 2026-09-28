@@ -30,6 +30,12 @@ models/
 !/data/translit_model/hindi_forms.json.gz
 !/data/translit_model/benchmark.json
 !/data/translit_model/gpt.json.gz
+# ...and the Rekhta line engine's own model (training/rekhta/, ~50 MB fp16) --
+# rekhta_translit.py loads it (torch locally, numpy on Vercel). Rekhta Labs'
+# models (data/rekhta_models/) are theirs: fetched on first use, never committed.
+!/data/rekhta_model/
+/data/rekhta_model/*
+!/data/rekhta_model/model.pt
 # resumability checkpoint/title-cache files: local working state, not shipped data.
 /data/.lexicon_checkpoint.json
 /data/.lexicon_titles.json

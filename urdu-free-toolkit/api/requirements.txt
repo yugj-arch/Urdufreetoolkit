@@ -6,6 +6,12 @@
 # pure-Python offline transliteration (Aksharamukha; the rule engine is built in).
 # Offline recognizers show as "not installed" on the deployed site and the app
 # runs fine without them.
+#
+# The neural transliterators (Rekhta line engine, Urdu Neural) run their
+# checkpoints on numpy here (urdu_nn/npnn.py): the deep-learning framework
+# they train with is too big for a function.
+# sentencepiece tokenises for Rekhta Labs' models, fetched on first use;
+# rapidfuzz scores word similarity in the Rekhta reader.
 
 Flask==3.0.3
 python-dotenv==1.0.1
@@ -15,3 +21,6 @@ anthropic>=0.40.0
 google-genai>=1.0.0
 groq>=0.11.0
 aksharamukha>=2.2
+numpy>=1.26
+sentencepiece>=0.2.0
+rapidfuzz>=3.0

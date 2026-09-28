@@ -25,15 +25,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-ROOT = Path(__file__).resolve().parents[1]
-MODELS = ROOT / "data" / "rekhta_models"
-REPOS = {"ur2hi": "rekhtalabs/ur-2-hi-translit", "hi2ur": "rekhtalabs/hi-2-ur-translit"}
-FILES = {   # direction -> (source spm, target spm, checkpoint)
-    "ur2hi": ("nastaaliq_char.model", "devanagari_char.model", "transformer_transliteration_final.pt"),
-    "hi2ur": ("devanagari_bpe.model", "nastaaliq_bpe.model", "h2u_2.0.pt"),
-}
-PAD, BOS, EOS = 0, 2, 3
-MAX_LEN = 128            # both models were trained on <= 128 pieces
+# where the files live is torch-free (the deployed site runs these models on numpy)
+from urdu_nn.rekhta_models import BOS, EOS, FILES, MAX_LEN, MODELS, PAD, REPOS  # noqa: F401
 
 
 class _Sinusoid(nn.Module):
