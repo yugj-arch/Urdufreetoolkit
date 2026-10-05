@@ -276,6 +276,30 @@ def test_pen_name_is_quoted_as_rekhta_prints_it(teacher, tmp_path):
     assert "'ġhālib'" in r["roman_diacritic"] and "'ghalib'" in r["roman"]
 
 
+def test_words_line_up_across_scripts(teacher, tmp_path):
+    # the reader's word popover: a word Devanagari writes as one (करेंगे for
+    # کریں گے, दिल-ए-नादाँ for دل ناداں) still knows its Urdu and its Roman
+    import rekhta_translit as rt
+    eng = rt.RekhtaTransliterator(mode="teacher", lexicon_path=tmp_path / "none",
+                                  corrections_path=tmp_path / "none")
+    r = eng.transliterate_full("وفا کریں گے، دل ناداں\n\nغالبؔ")
+    lines = {k: r[v].split("\n") for k, v in (("hi", "devanagari"), ("ro", "roman"), ("rod", "roman_diacritic"))}
+    assert len(r["words"]) == 3 and r["words"][1] == []
+    for ln, segs in enumerate(r["words"]):
+        for k in ("hi", "ro", "rod"):
+            assert "".join(s[k] for s in segs).rstrip() == lines[k][ln]
+    words = {s["ur"]: s for s in r["words"][0] if not s.get("x")}
+    assert words["کریں گے"]["hi"] == "करेंगे" and words["دل ناداں"]["hi"] == "दिल-ए-नादाँ"
+    assert r["words"][2][0]["hi"] == "'ग़ालिब'"
+
+
+def test_api_sends_the_word_line_up():
+    import app as app_mod
+    rows = app_mod.app.test_client().post(
+        "/api/transliterate", json={"text": "وفا کریں گے", "providers": ["rekhta"]}).get_json()["results"]
+    assert rows[0]["ok"] and any(s.get("ur") == "کریں گے" for s in rows[0]["words"][0])
+
+
 def test_simple_roman_is_rekhtas_toggle():
     from urdu_nn.rekhta_lexicon import RekhtaLexicon
     lex = RekhtaLexicon(simple={"yaad": "yaad", "haath": "hath"})

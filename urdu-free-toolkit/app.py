@@ -126,7 +126,9 @@ def api_transliterate():
         {"provider_id": r.provider_id, "ok": r.ok, "error": r.error, "ms": r.ms,
          "devanagari": getattr(r, "devanagari", ""),
          "roman": getattr(r, "roman", ""),
-         "roman_diacritic": getattr(r, "roman_diacritic", "")}
+         "roman_diacritic": getattr(r, "roman_diacritic", ""),
+         # the words of each line lined up across the scripts, where the engine knows
+         "words": getattr(r, "words", None)}
         for r in results]})
 
 
