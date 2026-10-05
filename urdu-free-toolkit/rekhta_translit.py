@@ -27,6 +27,7 @@ import json
 import logging
 import re
 import threading
+import unicodedata
 from pathlib import Path
 
 from urdu_nn.rekhta_roman import (Reader, WordModel, ain_respell, align_units, deva_units,
@@ -88,6 +89,16 @@ class LineModel:
         return self.net.logprob(srcs, tgts)
 
 
+_HALF_NASAL = re.compile("[ङञणन]्(?=[कखगघचछजझटठडढतथदध])")
+
+
+def nasal_convention(deva: str) -> str:
+    """rekhta.org writes a nasal before a consonant of its own class with the
+    anusvara (ज़िंदगी, रंग, मंज़िल -- 1450 times to 60 on its pages); before
+    ब/प it is split (जुम्बिश, संभाल), so that stays as read."""
+    return unicodedata.normalize("NFC", _HALF_NASAL.sub("ं", unicodedata.normalize("NFD", deva)))
+
+
 def _quote(word: str, wrap: str) -> str:
     """A pen name in Rekhta's quotes: 'ग़ालिब', ग़ुबार-ए-'मीर', 'मीर'-जी."""
     if not wrap or not word:
@@ -121,34 +132,12 @@ class Ensemble:
     read-back log P(urdu | devanagari), plus a small weight on our model's
     own score."""
 
-    def __init__(self, student: LineModel, fwd, back, prior: float = 0.3, margin: float = 0.3,
-                 student_first: bool = False):
+    def __init__(self, student: LineModel, fwd, back, prior: float = 0.3, margin: float = 0.3):
         self.student, self.fwd, self.back = student, fwd, back
         self.prior, self.margin = prior, margin
-        self.student_first = student_first
-        self.stats = {"rekhta": 0, "refereed": 0, "student": 0}
+        self.stats = {"rekhta": 0, "refereed": 0}
 
     def choose(self, runs: list[str]) -> list[str]:
-        if not self.student_first:
-            return self._choose(runs)
-        # a student fine-tuned on rekhta.org's own Devanagari reads like its
-        # editors (izafat, homographs, spellings): its reading stands wherever
-        # it is sound by the same test as Rekhta's model's
-        out: list[str | None] = [None] * len(runs)
-        cand = [_clean(t) for t in self.student(runs)]
-        backs = self.back(cand)
-        rest = []
-        for i, (r, c, b) in enumerate(zip(runs, cand, backs)):
-            if c and not reading_ok(r, c, b):
-                out[i] = c
-                self.stats["student"] += 1
-            else:
-                rest.append(i)
-        for i, d in zip(rest, self._choose([runs[i] for i in rest]) if rest else []):
-            out[i] = d
-        return out
-
-    def _choose(self, runs: list[str]) -> list[str]:
         out: list[str | None] = [None] * len(runs)
         tg = [_clean(t) for t in self.fwd(runs)]
         backs = self.back(tg)
@@ -250,7 +239,7 @@ class RekhtaTransliterator:
     def __init__(self, model_path: Path = MODEL_PATH, device: str = "cpu", beam: int = 4,
                  word_dir: Path = WORD_DIR, use_teacher: bool | None = None,
                  mode: str | None = None, corrections_path: Path | None = None,
-                 lexicon_path: Path | None = None, student_first: bool | None = None):
+                 lexicon_path: Path | None = None):
         from urdu_nn.npnn import use_torch
         from urdu_nn.rekhta_models import load_teacher
         if use_torch():
@@ -276,16 +265,19 @@ class RekhtaTransliterator:
         elif mode == "student":
             self.model = LineModel(Path(model_path), device, beam)
         else:
-            student = LineModel(Path(model_path), device, beam)
-            if student_first is None:     # a student tuned on rekhta.org's pages says so
-                student_first = bool(student.net.meta.get("site_tuned"))
-            self.model = Ensemble(student, *teachers, student_first=student_first)
+            self.model = Ensemble(LineModel(Path(model_path), device, beam), *teachers)
         self.mode = mode
         self.corrections = load_corrections(corrections_path)
         from urdu_nn.rekhta_lexicon import RekhtaLexicon
         if lexicon_path is None:
             lexicon_path = next((p for p in LEXICON_PATHS if p.exists()), None)
         self.lexicon = RekhtaLexicon.load(lexicon_path)
+        self.use_meter = True
+        # measured on rekhta.org's test ghazals: Rekhta's model spells a poem's
+        # Devanagari better than the lexicon's majority does (word 94.2 vs 93.7),
+        # so the lexicon spells the Roman only, and only where the readings
+        # match exactly (an izafat-blind match would add an -e- to the Roman alone)
+        self.lex_loose, self.lex_deva = False, False
         self.reader = Reader(*self._tables(word_dir))
         self._lock = threading.Lock()
         self._cache: dict[str, str] = {}
@@ -325,11 +317,12 @@ class RekhtaTransliterator:
         return "".join(units[k][0] + (units[k][1].replace("-e-", "-ए-") if k < j1 - 1 else "")
                        for k in range(j0, j1))
 
-    def _lex_hits(self, words: list[str], spans, units) -> dict[int, tuple[int, str, str]]:
+    def _lex_hits(self, words: list[str], spans, units) -> dict[int, tuple[int, str, str, bool]]:
         """Rekhta's spellings for this run: first span -> (last span, its
-        devanagari, its roman), longest Urdu phrase first, never across a
-        span (a word the model joined or split stays one piece)."""
-        hits: dict[int, tuple[int, str, str]] = {}
+        devanagari, its roman, whether the roman came from inside a compound),
+        longest Urdu phrase first, never across a span (a word the model
+        joined or split stays one piece)."""
+        hits: dict[int, tuple[int, str, str, bool]] = {}
         if not len(self.lexicon):
             return hits
         from urdu_nn.rekhta_lexicon import urdu_key
@@ -346,9 +339,12 @@ class RekhtaTransliterator:
                 if k1 == k and i1 - i0 == 1 and spans[k][3] - spans[k][2] == 1:
                     d0, r0 = ain_respell(words[i0], ours, self.reader.read(ours, words[i0]))
                     prior = (d0, render(r0, "rekhta"))
-                got = self.lexicon.lookup(key, ours, prior)
+                got = self.lexicon.lookup(key, ours, prior, self.lex_loose)
                 if got:
-                    hit = (k1, *got)
+                    hit = (k1, *got, False)
+                    break
+                if prior and (got := self.lexicon.lookup_part(key, ours)):
+                    hit = (k1, *got, True)       # اہل as in اہل دل: ahl, not ahal
                     break
             if hit:
                 hits[k] = hit
@@ -384,9 +380,15 @@ class RekhtaTransliterator:
         while k < len(spans):
             i0, i1, j0, j1 = spans[k]
             if k in hits:
-                k1, d, roman = hits[k]
+                k1, d, roman, part = hits[k]
                 i1, j1 = spans[k1][1], spans[k1][3]
-                r, verbatim = rekhta_to_rich(roman, d), roman
+                # a spelling from inside a compound is re-rendered for where it stands
+                r, verbatim = rekhta_to_rich(roman, d), "" if part else roman
+                if not self.lex_deva:
+                    d = self._deva_of(units, j0, j1)
+                    if i1 - i0 == 1 and j1 - j0 == 1:
+                        d = ain_respell("".join(words[i0:i1]), d, "")[0]
+                    d = nasal_convention(d)
                 k = k1
             else:
                 urdu = "".join(words[i0:i1])
@@ -402,6 +404,7 @@ class RekhtaTransliterator:
                                  else self.reader.read(units[m][0], "") for m in range(j0, j1))
                     if i1 - i0 == 1 and j1 - j0 == 1:
                         d, r = ain_respell(urdu, d, r)     # मा'लूम, ma.alūm
+                    d = nasal_convention(d)                 # ज़िन्दगी -> ज़िंदगी
             m = marks[i0:i1]
             wrap = "" if not any(m) else "all" if len(m) == 1 else "last" if m[-1] else "first"
             joiner = units[j1 - 1][1] if k < len(spans) - 1 else ""
@@ -436,6 +439,104 @@ class RekhtaTransliterator:
             out.append(_quote(s, wrap))
         return "".join(out)
 
+    # -- the meter: a misread line doesn't scan with the rest of its ghazal ------
+
+    METER_TAU, METER_DELTA, METER_GAP = 0.3, 0.1, 4     # fitted on rekhta.org's dev ghazals
+
+    def rich_line(self, run: str, deva: str) -> str | None:
+        """R for a reading of a run (the reader's schwas, no respelling) --
+        what ``urdu_nn.meter`` scans."""
+        words, units = run.split(), deva_units(deva)
+        spans = align_units(words, units)
+        if spans is None:
+            return None
+        parts = []
+        for n, (i0, i1, j0, j1) in enumerate(spans):
+            urdu = "".join(words[i0:i1])
+            parts.append("-".join(self.reader.read(units[m][0], urdu if j1 - j0 == 1 else "")
+                                  for m in range(j0, j1)))
+            if n < len(spans) - 1:
+                parts.append(units[j1 - 1][1])
+        return "".join(parts)
+
+    @staticmethod
+    def _izafat_toggles(run: str, deva: str) -> list[str]:
+        """The reading with one izafat added or taken away."""
+        words, units = run.split(), deva_units(deva)
+        spans = align_units(words, units)
+        if spans is None:
+            return []
+        out = []
+        for n in range(len(spans) - 1):
+            j = spans[n][3] - 1
+            if units[j][1] not in (" ", "-e-"):
+                continue
+            alt = [list(u) for u in units]
+            alt[j][1] = " " if units[j][1] == "-e-" else "-e-"
+            out.append("".join(u[0] + (u[1].replace("-e-", "-ए-") if k < len(alt) - 1 else "")
+                               for k, u in enumerate(alt)))
+        return out
+
+    def _scorer(self):
+        m = self.model
+        return m.fwd.logprob if isinstance(m, Ensemble) else getattr(m, "logprob", None)
+
+    def by_meter(self, runs: list[str], devas: list[str]) -> list[str]:
+        """Re-read the lines of a poem that don't scan with the rest of it.
+
+        A line keeps its reading unless that reading can be read in the
+        meter of few of the other lines while one close to it -- an izafat
+        added or dropped, or one word read differently by our student --
+        that Rekhta's model finds nearly as likely, fits clearly more of
+        them. Prose, or under four lines, is left alone."""
+        from urdu_nn.meter import Ghazal, syllables
+        if len(runs) < 4:
+            return devas
+        syl = [syllables(x) if (x := self.rich_line(r, d)) else [] for r, d in zip(runs, devas)]
+        g = Ghazal(syl)
+        others = g.n - 1
+        if others < 3:
+            return devas
+        sup = [g.support(s, i) if s else 0 for i, s in enumerate(syl)]
+        todo = [i for i in range(len(runs)) if syl[i] and sup[i] < self.METER_TAU * others]
+        if not todo:
+            return devas
+        score = self._scorer()
+        if score is None:
+            return devas
+        cands = {i: self._izafat_toggles(runs[i], devas[i]) for i in todo}
+        if isinstance(self.model, Ensemble):
+            for i, hyps in zip(todo, self.model.student.nbest([runs[i] for i in todo])):
+                cands[i] += [_clean(h) for h, _ in hyps]
+        from urdu_nn.rekhta_lexicon import deva_fold
+
+        def close(t, c):
+            if deva_fold(t, izafat=False) == deva_fold(c, izafat=False):
+                return True
+            a, b = t.replace("-", " ").split(), c.replace("-", " ").split()
+            return len(a) == len(b) and sum(x != y for x, y in zip(a, b)) == 1
+
+        flat = [(i, c) for i in todo for c in dict.fromkeys(cands[i])
+                if c and c != devas[i] and close(devas[i], c) and _lines_up(runs[i], c)]
+        if not flat:
+            return devas
+        lp = score([runs[i] for i, _ in flat] + [runs[i] for i in todo],
+                   [c for _, c in flat] + [devas[i] for i in todo])
+        own = dict(zip(todo, lp[len(flat):]))
+        best: dict[int, tuple[int, float, str]] = {}
+        for (i, c), p in zip(flat, lp):
+            if p < own[i] - self.METER_DELTA:
+                continue
+            s = syllables(self.rich_line(runs[i], c) or "")
+            k = g.support(s, i) if s else 0
+            if k >= max(self.METER_TAU * others, sup[i] + self.METER_GAP) and \
+                    (i not in best or (k, p) > best[i][:2]):
+                best[i] = (k, p, c)
+        out = list(devas)
+        for i, (_, _, c) in best.items():
+            out[i] = c
+        return out
+
     def transliterate_full(self, text: str) -> dict[str, str]:
         """-> {devanagari, roman (rekhta.org's simple Roman), roman_diacritic
         (its marked Roman), ascii (its ASCII table), plain (casual)}."""
@@ -444,9 +545,15 @@ class RekhtaTransliterator:
         runs = [t for s in segs for k, t in s if k == "u"]
         devas = self.deva(runs)
         self.reader.prefetch([w for r in runs for w in r.split()])
+        # a poem's misras (one run each) are read together, against its meter
+        verse = [n for n, s in enumerate(segs) if sum(k == "u" for k, _ in s) == 1]
+        line_deva: dict[int, str] = {}
+        if self.use_meter and len(verse) >= 4:
+            vr = [next(t for k, t in segs[n] if k == "u") for n in verse]
+            line_deva = dict(zip(verse, self.by_meter(vr, [devas[t] for t in vr])))
         styles = (("roman", "simple"), ("roman_diacritic", "rekhta"), ("ascii", "ascii"), ("plain", "plain"))
         out = {"devanagari": [], **{k: [] for k, _ in styles}}
-        for line, s in zip(lines, segs):
+        for ln, (line, s) in enumerate(zip(lines, segs)):
             marks = takhallus_marks(line)
             if len(marks) != sum(len(t.split()) for k, t in s if k == "u"):
                 marks = []
@@ -458,7 +565,7 @@ class RekhtaTransliterator:
                     r_line.append(("x", _punct(t, _PUNCT_ROMAN)))
                     prev = t
                     continue
-                d = devas[t]
+                d = line_deva.get(ln, devas[t])
                 if re.search(r"[\d۰-۹٠-٩]\s*ء?\s*$", prev) and t.startswith("میں") \
                         and d.startswith("मैं"):
                     d = "में" + d[3:]          # "1947ء میں": the model never saw the year

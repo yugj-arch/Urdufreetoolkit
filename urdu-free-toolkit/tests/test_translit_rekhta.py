@@ -229,6 +229,15 @@ def test_ascii_table_parses_back_to_r():
         assert rr.render(rr.ascii_to_rich(a), "ascii") == a
 
 
+def test_a_correction_may_be_typed_in_either_rekhta_roman(tmp_path):
+    import rekhta_translit as rt
+    p = tmp_path / "fix.tsv"
+    rt.save_correction("خوف", "ख़ौफ़", "ḳhauf", path=p)
+    rt.save_correction("پڑھائی", "पढ़ाई", "pa.Dhaa.ii", path=p)
+    fixes = rt.load_corrections(p)
+    assert fixes["خوف"] == ("ख़ौफ़", "xauf") and fixes["پڑھائی"] == ("पढ़ाई", "paṛhāī")
+
+
 def test_corrections_file_round_trip(tmp_path):
     import rekhta_translit as rt
     p = tmp_path / "fix.tsv"

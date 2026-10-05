@@ -65,9 +65,13 @@ class RekhtaLexicon:
     """urdu phrase key -> [(devanagari, roman, count)], most frequent first;
     and ``simple``: Rekhta's marked Roman word -> its simple Roman."""
 
-    def __init__(self, entries: dict[str, list] | None = None, simple: dict[str, str] | None = None):
+    def __init__(self, entries: dict[str, list] | None = None, simple: dict[str, str] | None = None,
+                 pairs: dict[str, list] | None = None, parts: dict[str, list] | None = None):
         self.entries = {k: [tuple(e) for e in v] for k, v in (entries or {}).items()}
         self.simple = dict(simple or {})
+        self.pairs = dict(pairs or {})       # "w1 w2" -> [joined in one word, written apart]
+        # words seen only inside compounds (اہل in اہل دل): their spelling there
+        self.parts = {k: [tuple(e) for e in v] for k, v in (parts or {}).items()}
         self.max_phrase = max((k.count(" ") + 1 for k in self.entries), default=1)
 
     def __len__(self) -> int:
@@ -100,22 +104,57 @@ class RekhtaLexicon:
                     if x and y:
                         yield x, y
 
+    @staticmethod
+    def word_pairs(row: dict):
+        """("w1 w2", joined) for every two neighbouring Urdu words of a gold
+        ghazal: joined when Rekhta wrote them as one word (an izafat or
+        hyphen compound, दिल-ए-नादाँ), else apart (दिल बेताब)."""
+        for lu in (row.get("units") or {}).get("ur", []):
+            words = [(k, urdu_key(w).split()) for k, (_, w) in enumerate(lu)]
+            flat = [(k, w) for k, ws in words for w in ws]
+            for (k1, a), (k2, b) in zip(flat, flat[1:]):
+                yield f"{a} {b}", k1 == k2
+
+    @staticmethod
+    def word_parts(ur: str, hi: str, ro: str):
+        """The words of a compound unit, each with its own spelling:
+        اہل دل / अहल-ए-दिल / ahl-e-dil -> (اہل, अहल, ahl), (دل, दिल, dil). Only
+        where the parts line up one for one."""
+        words = ur.split()
+        if len(words) < 2:
+            return
+        hs = [x for x in hi.split("-") if x and x != "ए"]
+        rs = [x for x in ro.split("-") if x and x != "e"]
+        if len(hs) == len(rs) == len(words):
+            yield from zip(words, hs, rs)
+
     @classmethod
     def build(cls, rows: list[dict]) -> "RekhtaLexicon":
         c: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
         s: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+        p: dict[str, list] = collections.defaultdict(lambda: [0, 0])
+        part: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
         for row in rows:
             for ur, hi, ro in cls.units_of(row):
                 c[ur][(hi, ro)] += 1
+                for w, h, r in cls.word_parts(ur, hi, ro):
+                    part[w][(h, r)] += 1
             for x, y in cls.simple_pairs(row):
                 s[x][y] += 1
+            for key, joined in cls.word_pairs(row):
+                p[key][0 if joined else 1] += 1
+        # a pair only says something where its first word ever takes an izafat
+        heads = {k.split()[0] for k, (j, _) in p.items() if j}
         return cls({k: [(h, r, n) for (h, r), n in v.most_common()] for k, v in c.items()},
-                   {k: v.most_common(1)[0][0] for k, v in s.items()})
+                   {k: v.most_common(1)[0][0] for k, v in s.items()},
+                   {k: v for k, v in p.items() if k.split()[0] in heads},
+                   {k: [(h, r, n) for (h, r), n in v.most_common()] for k, v in part.items()})
 
     def save(self, path: Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = json.dumps({"entries": self.entries, "simple": self.simple},
+        data = json.dumps({"entries": self.entries, "simple": self.simple, "pairs": self.pairs,
+                           "parts": self.parts},
                           ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         path.write_bytes(gzip.compress(data) if path.suffix == ".gz" else data)
 
@@ -128,8 +167,40 @@ class RekhtaLexicon:
             raw = gzip.decompress(raw)
         data = json.loads(raw.decode("utf-8"))
         if "entries" in data and isinstance(data["entries"], dict):
-            return cls(data["entries"], data.get("simple"))
+            return cls(data["entries"], data.get("simple"), data.get("pairs"), data.get("parts"))
         return cls(data)
+
+    def agreement(self, words: list[str], units: list[list[str]], spans) -> tuple[float, float]:
+        """How Rekhta-like a reading is: (word score, izafat score), each a
+        sum of log shares -- for every Urdu word Rekhta has read, the share
+        of its readings that are this one; for every neighbouring pair whose
+        first word takes an izafat, the share of times Rekhta joined (or
+        didn't join) them as this reading does. 0 where Rekhta is silent."""
+        import math
+        wsc = isc = 0.0
+        for i0, i1, j0, j1 in spans:
+            if i1 - i0 != 1:
+                continue
+            d = "".join(units[k][0] for k in range(j0, j1))
+            cands = self.entries.get(urdu_key(words[i0]))
+            if cands:
+                f = deva_fold(d)
+                tot = sum(n for *_, n in cands)
+                hit = sum(n for h, _, n in cands if deva_fold(h) == f)
+                wsc += math.log((hit + 0.5) / (tot + 1.0))
+        span_of = {}
+        for k, (i0, i1, j0, j1) in enumerate(spans):
+            for i in range(i0, i1):
+                span_of[i] = (k, j0, j1)
+        for i in range(len(words) - 1):
+            pr = self.pairs.get(urdu_key(words[i:i + 2]))
+            if not pr:
+                continue
+            (k1, a0, a1), (k2, b0, b1) = span_of[i], span_of[i + 1]
+            joined = k1 == k2 or (a1 == b0 and units[a1 - 1][1] != " ")
+            j, s = pr
+            isc += math.log(((j if joined else s) + 0.5) / (j + s + 1.0))
+        return wsc, isc
 
     def to_simple(self, marked: str) -> str:
         """Rekhta's simple Roman for a run of its marked Roman: each word as
@@ -151,7 +222,8 @@ class RekhtaLexicon:
 
     # -- use --------------------------------------------------------------------
 
-    def lookup(self, key: str, ours: str, prior: tuple[str, str] | None = None) -> tuple[str, str] | None:
+    def lookup(self, key: str, ours: str, prior: tuple[str, str] | None = None,
+               loose: bool = True) -> tuple[str, str] | None:
         """Rekhta's (devanagari, roman) for the Urdu ``key`` when one of its
         readings is ours (``ours`` = our Devanagari for it), else None. A
         compound may differ from ours by the izafat alone (दिल-ए-नादाँ for
@@ -165,7 +237,7 @@ class RekhtaLexicon:
             return None
         f = deva_fold(ours)
         match = [c for c in cands if deva_fold(c[0]) == f]
-        if not match and " " in key:
+        if not match and loose and " " in key:
             f = deva_fold(ours, izafat=False)
             match = [c for c in cands if deva_fold(c[0], izafat=False) == f]
         if not match:
@@ -178,6 +250,21 @@ class RekhtaLexicon:
             for v, p in zip(votes, prior):
                 if p in v:
                     v[p] += 0.5
+        return votes[0].most_common(1)[0][0], votes[1].most_common(1)[0][0]
+
+    def lookup_part(self, key: str, ours: str) -> tuple[str, str] | None:
+        """Like ``lookup``, from the spellings a word has inside Rekhta's
+        compounds -- for a word it has never printed on its own."""
+        if " " in key or key in self.entries or key not in self.parts:
+            return None
+        f = deva_fold(ours)
+        match = [c for c in self.parts[key] if deva_fold(c[0]) == f]
+        if not match:
+            return None
+        votes: tuple[collections.Counter, collections.Counter] = (collections.Counter(), collections.Counter())
+        for h, r, n in match:
+            votes[0][h] += n
+            votes[1][r] += n
         return votes[0].most_common(1)[0][0], votes[1].most_common(1)[0][0]
 
 

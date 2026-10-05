@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
-"""A small gold set from rekhta.org itself: ghazals as Rekhta publishes them
-in Urdu, Devanagari and both of its Roman spellings (the marked one,
+"""A gold set from rekhta.org itself: ghazals as Rekhta publishes them in
+Urdu, Devanagari and both of its Roman spellings (the marked one,
 ``dil-e-nādāñ``, and the simple one, ``dil-e-nadan``).
 
-Only for measuring the engine against Rekhta -- kept local in
-``data/rekhta_gold/`` (gitignored), never shipped. Fetches politely (one
-page a second) and resumes where it stopped.
+It measures the engine against Rekhta (dev ghazals to look at, test ghazals
+only ever scored) and gives Rekhta's word spellings to the engine's lexicon
+(``urdu_nn.rekhta_lexicon``). The pages stay local in ``data/rekhta_gold/``
+(gitignored); only the lexicon built from them ships. Fetches politely
+(``--delay`` seconds between a worker's pages, robots.txt allows /ghazals/)
+and resumes where it stopped.
 
-    python -m training.rekhta.gold fetch --per-poet 8
-    python -m training.rekhta.gold stats
+    python -m training.rekhta.gold fetch --per-poet 25 --workers 2
+    python -m training.rekhta.gold score --split test --lex dev
+    python -m training.rekhta.gold lexicon --split all --ship   # -> data/rekhta_lexicon.json.gz
 """
 from __future__ import annotations
 
@@ -253,57 +257,9 @@ def score(rows: list[dict], engine, label: str = "", dump: Path | None = None) -
     return res
 
 
-# ---------------------------------------------------------------------------
-# fine-tuning data: rekhta.org's own Devanagari for the line model
-# ---------------------------------------------------------------------------
-
-def site_pairs(row: dict) -> list[tuple[str, str]]:
-    """(urdu run, Rekhta's Devanagari for it) for every line of a ghazal
-    that is one model run: punctuation and the takhallus quotes off (the
-    engine adds those around the model), the ain apostrophe kept."""
-    from urdu_nn.rekhta_lexicon import clean
-    from urdu_nn.rekhta_text import segments
-    out = []
-    for ur, hi in zip(row["ur"], row["hi"]):
-        runs = [t for k, t in segments(ur) if k == "u"]
-        if len(runs) != 1:
-            continue
-        toks = [clean(t) for t in tokens(hi)]
-        target = " ".join(t for t in toks if t)
-        if target and not re.search(r"[A-Za-z0-9]", target):
-            out.append((runs[0], target))
-    return out
-
-
-def build_trainset(out_dir: Path, old_ratio: float, seed: int = 13) -> None:
-    """``data/rekhta_ds/site/{train,dev}.tsv``: the gold dev ghazals' lines
-    (a tenth of the ghazals held out as the fine-tune's own dev set), mixed
-    with ``old_ratio`` times as many of the student's distilled lines so it
-    keeps reading prose. The gold test ghazals are never used."""
-    import random
-    from urdu_nn.npnn import Checkpoint
-    rng = random.Random(seed)
-    vocab = set(Checkpoint(ROOT / "data" / "rekhta_model" / "model.pt").vocab.itos)
-    train, dev = [], []
-    for r in load("dev"):
-        pairs = [p for p in site_pairs(r) if set(p[0]) <= vocab and set(p[1]) <= vocab]
-        (dev if int(hashlib.md5(("ft" + r["slug"]).encode()).hexdigest()[:8], 16) % 10 == 0
-         else train).extend(pairs)
-    old = (ROOT / "data" / "rekhta_ds" / "v3" / "train.tsv").read_text(encoding="utf-8").splitlines()
-    old = [l for l in old if l.endswith("\t1")]
-    rng.shuffle(old)
-    old = old[:int(len(train) * old_ratio)]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "train.tsv").write_text(
-        "\n".join([f"site\t{u}\t{h}\t1\t1" for u, h in train] + old) + "\n", encoding="utf-8")
-    (out_dir / "dev.tsv").write_text("\n".join(f"site\t{u}\t{h}\t1\t1" for u, h in dev) + "\n",
-                                     encoding="utf-8")
-    print(f"site lines: train {len(train)} dev {len(dev)}; old lines {len(old)} -> {out_dir}", flush=True)
-
-
-def engine_fn(mode: str = None, lexicon_path=None):
+def engine_fn(mode: str = None, lexicon_path=None, device: str = "cpu"):
     import rekhta_translit
-    eng = rekhta_translit.RekhtaTransliterator(lexicon_path=lexicon_path,
+    eng = rekhta_translit.RekhtaTransliterator(lexicon_path=lexicon_path, device=device,
                                                **({"mode": mode} if mode else {}))
     return eng.transliterate_full
 
@@ -319,8 +275,8 @@ def build_lexicon(split: str, path: Path) -> Path:
 def main(argv=None) -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["fetch", "stats", "score", "lexicon", "trainset"])
-    ap.add_argument("--old-ratio", type=float, default=1.0)
+    ap.add_argument("cmd", choices=["fetch", "stats", "score", "lexicon"])
+    ap.add_argument("--ship", action="store_true", help="lexicon: write data/rekhta_lexicon.json.gz")
     ap.add_argument("--per-poet", type=int, default=8)
     ap.add_argument("--delay", type=float, default=1.0)
     ap.add_argument("--workers", type=int, default=1)
@@ -328,19 +284,17 @@ def main(argv=None) -> int:
     ap.add_argument("--lex", default="none",
                     help="lexicon for scoring: none, or the split to build it from (dev/all)")
     ap.add_argument("--mode", default=None, help="engine mode (ensemble/student/teacher)")
+    ap.add_argument("--device", default="cpu")
     a = ap.parse_args(argv)
     if a.cmd == "fetch":
         fetch(a.per_poet, a.delay, a.workers)
     if a.cmd == "lexicon":
-        build_lexicon(a.split, GOLD / "lexicon.json.gz")
-        return 0
-    if a.cmd == "trainset":
-        build_trainset(ROOT / "data" / "rekhta_ds" / "site", a.old_ratio)
+        build_lexicon(a.split, ROOT / "data" / "rekhta_lexicon.json.gz" if a.ship else GOLD / "lexicon.json.gz")
         return 0
     if a.cmd == "score":
         lex = Path("-none-") if a.lex == "none" else build_lexicon(a.lex, GOLD / f"lexicon_{a.lex}.json.gz")
         rows = load(None if a.split == "all" else a.split)
-        score(rows, engine_fn(a.mode, lex), f"{a.split} lex={a.lex}",
+        score(rows, engine_fn(a.mode, lex, a.device), f"{a.split} lex={a.lex}",
               GOLD / f"diff_{a.split}_lex-{a.lex}.txt")
         return 0
     rows = load()
