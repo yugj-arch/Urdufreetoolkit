@@ -302,13 +302,18 @@ async function runTranslit() {
     }
 
     const urLines = splitLines(text);
+    // the server keeps blank lines in `words`; the reader drops them
+    const kept = text.trim().replace(/\r/g, "").split("\n").map((l) => !!l.trim());
     state.results = {};
     rows.forEach((row) => {
+      const words = Array.isArray(row.words) && row.words.length === kept.length
+        ? row.words.filter((_, i) => kept[i]) : null;
       state.results[row.provider_id] = {
         ur: urLines,
         hi: splitLines(row.devanagari),
         ro: splitLines(row.roman),
         rod: splitLines(row.roman_diacritic || row.roman),
+        words,
         ms: row.ms,
       };
     });
@@ -447,21 +452,58 @@ function renderGhazal() {
   if (!lines.length) g.innerHTML = '<p class="hint">Nothing to show.</p>';
 }
 
+function wordSpan(text, lineIdx, wi, seg) {
+  const w = document.createElement("span");
+  w.className = "w";
+  w.textContent = text;
+  w.dataset.line = lineIdx;
+  w.dataset.wi = wi;
+  if (seg != null) w.dataset.seg = seg;
+  w.addEventListener("click", (e) => { e.stopPropagation(); openWordPop(w); });
+  return w;
+}
+
+/* The engine's own word line-up for a misra, when it sent one: segments that
+   each give one word (or the gap between words) in every script. */
+const segsFor = (lineIdx) => (state.result && state.result.words && state.result.words[lineIdx]) || null;
+const URDU_LETTER = /[ء-يٱ-ۓۺ-ۿ]/;
+
 function misraEl(text, lineIdx, rtl) {
   const p = document.createElement("p");
   p.className = "misra";
   if (rtl) p.dir = "rtl";
+  const segs = segsFor(lineIdx);
+  const k = curKey();
+  if (segs && k !== "ur" && segs.map((s) => s[k] || "").join("").trim() === String(text).trim()) {
+    // Devanagari / Roman: one tappable word per segment, so a word the script
+    // writes as one (निभाएँगे for نبھائیں گے, दिल-ए-नादाँ) still knows its Urdu
+    let wi = 0;
+    segs.forEach((s, si) => {
+      const t = s[k] || "";
+      if (!t) return;
+      if (s.x || !t.trim()) p.appendChild(document.createTextNode(t));
+      else p.appendChild(wordSpan(t, lineIdx, wi++, si));
+    });
+    return p;
+  }
+  // Urdu, or an engine without a line-up: split on spaces; Urdu words take
+  // their segment in order when the counts agree
   const parts = String(text).split(/(\s+)/);
-  parts.forEach((chunk, k) => {
+  const toks = parts.filter((c, i) => i % 2 === 0 && c && URDU_LETTER.test(c));
+  let owner = null;
+  if (segs && k === "ur") {
+    owner = [];
+    segs.forEach((s, si) => {
+      if (!s.x) String(s.ur || "").split(/\s+/).filter(Boolean).forEach(() => owner.push(si));
+    });
+    if (owner.length !== toks.length) owner = null;
+  }
+  let ui = 0;
+  parts.forEach((chunk, n) => {
     if (!chunk) return;
-    if (k % 2 === 1 || /^\s+$/.test(chunk)) { p.appendChild(document.createTextNode(chunk)); return; }
-    const w = document.createElement("span");
-    w.className = "w";
-    w.textContent = chunk;
-    w.dataset.line = lineIdx;
-    w.dataset.wi = (k / 2) | 0;
-    w.addEventListener("click", (e) => { e.stopPropagation(); openWordPop(w); });
-    p.appendChild(w);
+    if (n % 2 === 1 || /^\s+$/.test(chunk)) { p.appendChild(document.createTextNode(chunk)); return; }
+    const seg = owner && URDU_LETTER.test(chunk) ? owner[ui++] : null;
+    p.appendChild(wordSpan(chunk, lineIdx, (n / 2) | 0, seg));
   });
   return p;
 }
@@ -547,13 +589,16 @@ async function openWordPop(wordEl) {
   const pop = $("#word-pop");
   const lineIdx = +wordEl.dataset.line, wi = +wordEl.dataset.wi;
 
-  let forms = alignedForms(lineIdx, wi);
+  const segs = segsFor(lineIdx);
+  const seg = segs && wordEl.dataset.seg != null ? segs[+wordEl.dataset.seg] : null;
+  let forms = seg && !seg.x ? { ur: seg.ur, hi: seg.hi, ro: seg.ro, rod: seg.rod }
+                            : alignedForms(lineIdx, wi);
   const fill = (f) => {
     ["ur", "hi", "ro", "rod"].forEach((k) =>
       ($(`#word-pop [data-k="${k}"]`).textContent = (f && f[k]) || "—"));
     state.popForms = f || null;
-    // fixes are the Rekhta-style engine's, and need the Urdu word they're for
-    $("#wp-fix-open").hidden = !(f && f.ur && state.activeEngine === "rekhta");
+    // fixes are the Rekhta-style engine's, and need the one Urdu word they're for
+    $("#wp-fix-open").hidden = !(f && f.ur && !/\s/.test(f.ur.trim()) && state.activeEngine === "rekhta");
   };
 
   if (forms) {

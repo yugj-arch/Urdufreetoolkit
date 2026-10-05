@@ -18,5 +18,5 @@ from __future__ import annotations
 # At most four per step.
 FEATURED: dict[str, list[str]] = {
     "ocr":       ["gcv", "gpt"],
-    "translit":  ["rekhta", "neural", "gpt", "rule"],
+    "translit":  ["rekhta"],         # DotSyndicate Fine-tune only (2026-10-05)
 }

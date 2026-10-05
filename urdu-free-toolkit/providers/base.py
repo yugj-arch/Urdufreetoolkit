@@ -52,6 +52,11 @@ class TranslitResult(Result):
     devanagari: str = ""
     roman: str = ""              # plain ASCII ("khraab")
     roman_diacritic: str = ""    # Rekhta-style marks ("ḳharāb"); "" if unavailable
+    # per line, the line in order as segments: a word {"ur", "hi", "ro", "rod"}
+    # (Urdu words and how each script writes them -- نبھائیں گے is one word,
+    # निभाएँगे) or {"x": 1, "hi", "ro", "rod"} for what sits between words.
+    # Joining a script's segments gives that line. None if the engine can't say.
+    words: list | None = None
 
 
 @dataclass

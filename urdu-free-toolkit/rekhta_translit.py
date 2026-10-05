@@ -409,11 +409,37 @@ class RekhtaTransliterator:
             wrap = "" if not any(m) else "all" if len(m) == 1 else "last" if m[-1] else "first"
             joiner = units[j1 - 1][1] if k < len(spans) - 1 else ""
             out_deva.append(_quote(d, wrap) + joiner.replace("-e-", "-ए-"))
-            pieces.append((r, verbatim, wrap))
+            pieces.append((r, verbatim, wrap, " ".join(words[i0:i1]), _quote(d, wrap)))
             if joiner:
                 pieces.append(joiner)
             k += 1
         return "".join(out_deva), pieces
+
+    def _segments(self, pieces: list) -> list[dict]:
+        """A run's pieces as the reader's words: what a space separates is a
+        word, so a compound (दिल-ए-नादाँ) is one, carrying all its Urdu words."""
+        out: list[dict] = []
+        chunk: list = []
+
+        def flush():
+            if chunk:
+                words = [p for p in chunk if not isinstance(p, str)]
+                seg = {"ur": " ".join(p[3] for p in words),
+                       "hi": "".join(p.replace("-e-", "-ए-") if isinstance(p, str) else p[4]
+                                     for p in chunk)}
+                for key, style in (("ro", "simple"), ("rod", "rekhta"), ("ascii", "ascii")):
+                    seg[key] = self._render_pieces(chunk, style)
+                out.append(seg)
+                chunk.clear()
+
+        for p in pieces:
+            if p == " ":
+                flush()
+                out.append({"x": 1, "hi": " ", "ro": " ", "rod": " ", "ascii": " "})
+            else:
+                chunk.append(p)
+        flush()
+        return out
 
     def _render_pieces(self, pieces: list, style: str) -> str:
         """``style``: "rekhta" (rekhta.org's marked Roman), "simple" (its
@@ -424,7 +450,7 @@ class RekhtaTransliterator:
             if isinstance(p, str):
                 out.append(p)
                 continue
-            r, verbatim, wrap = p
+            r, verbatim, wrap = p[:3]
             near = [pieces[m] for m in (n - 1, n + 1) if 0 <= m < len(pieces)]
             compound = any(isinstance(j, str) and "-" in j for j in near)
             if style in ("rekhta", "simple"):
@@ -537,9 +563,10 @@ class RekhtaTransliterator:
             out[i] = c
         return out
 
-    def transliterate_full(self, text: str) -> dict[str, str]:
+    def transliterate_full(self, text: str) -> dict:
         """-> {devanagari, roman (rekhta.org's simple Roman), roman_diacritic
-        (its marked Roman), ascii (its ASCII table), plain (casual)}."""
+        (its marked Roman), ascii (its ASCII table), plain (casual), words
+        (per line, its words lined up across the scripts: ``_segments``)}."""
         lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         segs = [segments(line) for line in lines]
         runs = [t for s in segs for k, t in s if k == "u"]
@@ -553,16 +580,19 @@ class RekhtaTransliterator:
             line_deva = dict(zip(verse, self.by_meter(vr, [devas[t] for t in vr])))
         styles = (("roman", "simple"), ("roman_diacritic", "rekhta"), ("ascii", "ascii"), ("plain", "plain"))
         out = {"devanagari": [], **{k: [] for k, _ in styles}}
+        words: list[list[dict]] = []
         for ln, (line, s) in enumerate(zip(lines, segs)):
             marks = takhallus_marks(line)
             if len(marks) != sum(len(t.split()) for k, t in s if k == "u"):
                 marks = []
-            d_line, r_line = [], []
+            d_line, r_line, w_line = [], [], []
             prev = ""
             for kind, t in s:
                 if kind == "x":
                     d_line.append(_punct(t, _PUNCT_DEVA))
                     r_line.append(("x", _punct(t, _PUNCT_ROMAN)))
+                    ro = _punct(t, _PUNCT_ROMAN)
+                    w_line.append({"x": 1, "hi": d_line[-1], "ro": ro, "rod": ro, "ascii": ro})
                     prev = t
                     continue
                 d = line_deva.get(ln, devas[t])
@@ -574,11 +604,15 @@ class RekhtaTransliterator:
                 marks = marks[n:]
                 d_line.append(d)
                 r_line.append(("r", pieces))
+                w_line += self._segments(pieces)
             out["devanagari"].append("".join(d_line).rstrip())
             for key, style in styles:
                 out[key].append("".join(self._render_pieces(t, style) if k == "r" else t
                                         for k, t in r_line).rstrip())
-        return {k: "\n".join(v) for k, v in out.items()}
+            words.append(w_line)
+        res: dict = {k: "\n".join(v) for k, v in out.items()}
+        res["words"] = words
+        return res
 
     def transliterate(self, text: str) -> tuple[str, str, str]:
         r = self.transliterate_full(text)

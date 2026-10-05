@@ -46,15 +46,16 @@ class RekhtaTranslit(BaseProvider):
     def translit(self, text: str, opts: TranslitOpts) -> TranslitResult:
         def _run():
             import rekhta_translit
-            return rekhta_translit.transliterate(text)
+            return rekhta_translit.get_engine().transliterate_full(text)
 
         t = self._timed(_run)
         if not t["ok"]:
             return TranslitResult(provider_id=self.info.id, ok=False,
                                   error=t["error"], ms=t["ms"])
-        deva, roman, roman_dia = t["value"]
+        r = t["value"]
         return TranslitResult(provider_id=self.info.id, ok=True, ms=t["ms"],
-                              devanagari=deva, roman=roman, roman_diacritic=roman_dia)
+                              devanagari=r["devanagari"], roman=r["roman"],
+                              roman_diacritic=r["roman_diacritic"], words=r["words"])
 
 
 PROVIDER = RekhtaTranslit()
