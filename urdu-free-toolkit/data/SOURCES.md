@@ -278,3 +278,26 @@ runbook is in each module's docstring).
 - **Roman:** not learned. It is read off the Devanagari
   (`urdu_nn/rekhta_roman.py`), and schwas are chosen by the lexicon, the
   dictionary, human romanisations and the word model.
+
+# data/rekhta_lexicon.json.gz -- rekhta.org's own spellings (provider `rekhta`)
+
+Built by `python -m training.rekhta.gold lexicon --split all --ship`.
+
+- **Source:** ghazal pages on [rekhta.org](https://www.rekhta.org) (Urdu,
+  Devanagari and Roman versions of each page, ~2,000 ghazals by ~85 poets),
+  fetched in October 2026 by `training/rekhta/gold.py` at about one page a
+  second per worker (two workers). robots.txt allows `/ghazals/`. The pages
+  stay local in `data/rekhta_gold/` (gitignored). **Unlike every other file
+  in `data/`, this one is derived from rekhta.org.**
+- **What ships:** only word-level spellings, not poems: for each Urdu word or
+  izafat compound, Rekhta's Devanagari and marked Roman with how often each
+  was seen; Rekhta's simple Roman for each marked Roman word; for word pairs
+  that can take an izafat, how often Rekhta joined them.
+- **How it's used:** only to spell the Roman of a reading the engine already
+  chose (its Devanagari must match Rekhta's up to spelling). It never changes
+  a reading, and the Devanagari stays as Rekhta's model spells it (measured:
+  better than the lexicon's majority spelling).
+- **Licence:** rekhta.org's content belongs to the Rekhta Foundation, and no
+  open licence is stated. Get Rekhta's permission before using this file
+  commercially. Deleting it is safe: the engine then falls back to its rules
+  (Roman ~91% word accuracy against rekhta.org instead of ~93%).

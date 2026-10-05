@@ -25,12 +25,14 @@ from urdu_nn.scheme import R_VOWELS, deva_to_rich_candidates, fold_roman, to_pla
 ZER = "ِ"
 _ASPIRABLE = set("kgcjṭḍtdpbṛ")
 
-# R consonant unit -> (rekhta diacritic, ascii table)
+# R consonant unit -> (rekhta diacritic, ascii table). The diacritic column
+# is what rekhta.org prints (checked against its pages): ġh for غ, the
+# retroflex stops unmarked (uthtā, darte) and ḍ for the flap ड़ (chhoḍ, paḍhā)
 _CONS = {
-    "c": ("ch", "ch"), "ch": ("chh", "chh"), "x": ("ḳh", "KH"), "ġ": ("ġ", "G"),
+    "c": ("ch", "ch"), "ch": ("chh", "chh"), "x": ("ḳh", "KH"), "ġ": ("ġh", "G"),
     "ś": ("sh", "sh"), "ṣ": ("sh", "sh"), "ž": ("zh", "zh"),
-    "ṭ": ("ṭ", "T"), "ṭh": ("ṭh", "Th"), "ḍ": ("ḍ", "D"), "ḍh": ("ḍh", "Dh"),
-    "ṛ": ("ṛ", ".D"), "ṛh": ("ṛh", ".Dh"),
+    "ṭ": ("t", "T"), "ṭh": ("th", "Th"), "ḍ": ("d", "D"), "ḍh": ("dh", "Dh"),
+    "ṛ": ("ḍ", ".D"), "ṛh": ("ḍh", ".Dh"),
     "ṇ": ("n", "n"), "ṅ": ("n", "n"), "ñ": ("n", "n"),
 }
 _VOWEL = {"ā": ("ā", "aa"), "ī": ("ī", "ii"), "ū": ("ū", "uu")}
@@ -72,7 +74,12 @@ def _vowel_run(run: str, style: int) -> str:
             continue
         parts.append(v[i])
         i += 1
-    out = ".".join(_VOWEL.get(p, (p, p))[style] for p in parts)
+    out = ""
+    for k, p in enumerate(parts):
+        # rekhta.org writes no dot after u or o (huā, hue, koī) -- only the ASCII table does
+        if k and not (style == 0 and parts[k - 1] in ("u", "ū", "o")):
+            out += "."
+        out += _VOWEL.get(p, (p, p))[style]
     return out + ("ñ" if nasal else "")
 
 
@@ -95,13 +102,158 @@ def _render_word(word: str, style: int) -> str:
     return "".join(out)
 
 
-def render(rich: str, style: str) -> str:
-    """R line -> ``plain`` / ``rekhta`` / ``ascii`` Roman."""
+_DOUBLE = {"ā": "aa", "ī": "ii", "ū": "uu"}
+
+
+def _long(v: str, k: int, syl: list[dict]) -> bool:
+    """Does rekhta.org double this long vowel (yaad, jaane, siine, huuñ) or
+    mark it (kā, āḳhir, zamāne, bhūle)? Counted on its pages: a closed
+    one-syllable word doubles; so does the open first syllable of a two-
+    syllable word ending in a vowel (jaa-ne, paa-nī, sii-ne -- not ū), a
+    first ā before a hiatus (jaa.e) and a word-initial ā before an open
+    syllable (aarzū, aadmī). Everything else, and every part of a compound,
+    is marked."""
+    n, me = len(syl), syl[k]
+    if n == 1:
+        return me["closed"] or (v == "ā" and me["initial"])
+    if n != 2 or k != 0 or v == "ū":
+        return False
+    nxt_open = not syl[1]["closed"]
+    if v == "ī":
+        return not me["closed"] and nxt_open
+    return me["hiatus"] or (nxt_open and (not me["closed"] or me["initial"]))
+
+
+def _rekhta_word(word: str, compound: bool) -> str:
+    """One R word in rekhta.org's marked Roman."""
+    toks: list[list] = []                       # ["V", vowel, nasal] / ["C", unit]
+    for u in _units(word):
+        if u[0] in R_VOWELS:
+            nasal = u.endswith("~")
+            v, i, parts = u.rstrip("~"), 0, []
+            while i < len(v):
+                step = 2 if v[i] == "a" and v[i + 1:i + 2] in ("i", "u") else 1
+                parts.append(v[i:i + step])
+                i += step
+            toks += [["V", p, False] for p in parts]
+            toks[-1][2] = nasal
+        else:
+            toks.append(["C", u])
+    vix = [t for t, tok in enumerate(toks) if tok[0] == "V"]
+    syl = []
+    for k, t in enumerate(vix):
+        nxt = vix[k + 1] if k + 1 < len(vix) else len(toks)
+        cons = sum(1 for tok in toks[t + 1:nxt] if tok[0] == "C" and tok[1] != "'")
+        last = k == len(vix) - 1
+        syl.append({"closed": toks[t][2] or (cons > 0 if last else cons >= 2),
+                    "hiatus": nxt == t + 1, "initial": t == 0})
+    out = []
+    for t, tok in enumerate(toks):
+        nxt = toks[t + 1] if t + 1 < len(toks) else None
+        if tok[0] == "C":
+            u = tok[1]
+            if u == "ṃ":
+                out.append("m" if nxt and nxt[1][:1] in ("p", "b", "m") else "n")
+            elif u == "'":
+                if 0 < t < len(toks) - 1:
+                    out.append("'")
+            elif u == "~" or u == "ṅ":
+                out.append("ñ")                  # hoñge, rañg, añgusht
+            elif u == "ñ":                       # anusvara before ch/j: khīñchā, but ranj
+                prev = toks[t - 1] if t else None
+                out.append("ñ" if prev and prev[0] == "V" and prev[1] not in ("a", "i", "u") else "n")
+            else:
+                out.append(_CONS.get(u, (u, u))[0])
+            continue
+        v, k = tok[1], vix.index(t)
+        prev = toks[t - 1] if t else None
+        if prev and prev[0] == "V":
+            if v == "e" and prev[1] in ("i", "ī"):
+                v = "ye"                         # liye, kahiye, kījiye
+            elif not (prev[1] in ("u", "ū") or v == "o" or (prev[1] == "o" and v in ("i", "ī"))):
+                out.append(".")                  # ga.e, jaa.e, ro.eñge -- but huā, hue, koī, jaao
+        if v in ("i", "ī") and nxt and nxt[0] == "V" and nxt[1] == "e":
+            v = "i"
+        elif v in _DOUBLE and not compound and _long(v, k, syl):
+            v = _DOUBLE[v]
+        out.append(v + ("ñ" if tok[2] else ""))
+    return "".join(out)
+
+
+_AIN_HEAD = re.compile("^([क-ह]़?)(ा|ो|अ)(?!')")
+
+
+def ain_respell(urdu: str, deva: str, rich: str) -> tuple[str, str]:
+    """rekhta.org's spelling of an ain right after a word's first letter and
+    before a consonant (معلوم, یعنی, بعد, دعویٰ, وعدہ): the Devanagari keeps it
+    as an apostrophe (मा'लूम, या'नी, बा'द) and the Roman as a hiatus (ma.alūm,
+    ya.anī, ba.ad, sho.ala) -- Rekhta's commonest form, 3 to 1 on its pages.
+    Other words come back unchanged."""
+    u = urdu.rstrip(ZER)
+    if len(u) < 3 or u[1] != "ع" or u[0] in "اآع" or u[2] in "اآیےہ":
+        return deva, rich
+    d = unicodedata.normalize("NFD", deva)
+    m = _AIN_HEAD.match(d)
+    if not m:
+        return deva, rich
+    deva = unicodedata.normalize("NFC", d[:m.end()] + "'" + d[m.end():])
+    want = {"ा": "ā", "ो": "o", "अ": "a"}[m.group(2)]
+    rm = re.match(f"^([^aāiīuūeo']+){want}'?", rich)
+    if rm:
+        rich = rm.group(1) + {"ā": "aa", "o": "oa", "a": "aa"}[want] + rich[rm.end():]
+    return deva, rich
+
+
+# rekhta.org's simple Roman (its Roman toggle: dil-e-nadan tujhe hua kya hai),
+# from its marked Roman. Words it writes its own way:
+_SIMPLE_WORDS = {
+    "meñ": "mein", "maiñ": "main", "haiñ": "hain", "nahīñ": "nahin", "kahīñ": "kahin",
+    "hameñ": "hamein", "tumheñ": "tumhein", "unheñ": "unhen", "inheñ": "inhen", "jinheñ": "jinhen",
+    "kyuuñ": "kyun", "yuuñ": "yun", "huuñ": "hun", "ham": "hum", "vo": "wo", "tire": "tere",
+    "mire": "mere", "tirī": "teri", "mirī": "meri", "tirā": "tera", "mirā": "mera", "ik": "ek",
+    "kahūñ": "kahun", "jahāñ": "jahan", "yahāñ": "yahan", "vahāñ": "wahan",
+}
+
+
+def to_simple(word: str) -> str:
+    """One word of rekhta.org's marked Roman -> its simple Roman: marks off
+    (ā a, ḳh KH, ġh gh), ñ n (-eñ -en), v w, a word-initial ā kept long
+    (aankh, aate) and a doubled vowel kept (yaad, raat)."""
+    lw = word.lower()
+    if lw in _SIMPLE_WORDS:
+        return _SIMPLE_WORDS[lw]
+    s = word.replace("ḳh", "KH").replace("ġh", "gh").replace("ḍ", "D").replace("Ḍ", "D")
+    s = re.sub(r"(?<![\w'])ā", "aa", s)
+    s = s.replace("a.a", "a").replace(".", "")
+    s = s.replace("ii", "i").replace("uu", "u")
+    s = s.replace("ā", "a").replace("ī", "i").replace("ū", "u")
+    s = re.sub(r"eñ\b", "en", s)
+    s = re.sub(r"aiñ\b", "ain", s).replace("ñ", "n")
+    return re.sub(r"(?<![a-z])v|(?<=[aeiou-])v|(?<=n)v", "w", s)
+
+
+def undouble(roman: str) -> str:
+    """rekhta.org writes no doubled vowel inside a compound (hāl-e-dil, not haal)."""
+    return roman.replace("aa", "ā").replace("ii", "ī").replace("uu", "ū")
+
+
+def render(rich: str, style: str, compound: bool = False) -> str:
+    """R line -> ``plain`` / ``rekhta`` / ``ascii`` Roman. ``compound``: the
+    words are part of a hyphenated compound around them (rekhta.org marks
+    every long vowel there)."""
     if style == "plain":
         return to_plain(rich)
-    s = 0 if style == "rekhta" else 1
     parts = re.split(r"([ \-])", rich)
-    return "".join(p if p in (" ", "-") or not p else _render_word(p, s) for p in parts)
+    if style != "rekhta":
+        return "".join(p if p in (" ", "-") or not p else _render_word(p, 1) for p in parts)
+    out = []
+    for i, p in enumerate(parts):
+        if p in (" ", "-") or not p:
+            out.append(p)
+            continue
+        near = (parts[i - 1] if i else "", parts[i + 1] if i + 1 < len(parts) else "")
+        out.append(_rekhta_word(p, compound or "-" in near))
+    return "".join(out)
 
 
 _ASCII_IN = {".Dh": "ṛh", ".D": "ṛ", "KH": "x", "Th": "ṭh", "Dh": "ḍh", "chh": "ch", "ch": "c",
@@ -216,8 +368,8 @@ class Reader:
             best = self._pick(cands, deva, urdu)
         if "ँ" in deva and "ं" not in deva:
             best = best.replace("ṅ", "~")      # आँख is āñkh, a nasal vowel -- not āṅkh
-        if urdu.endswith("ہ") and deva.endswith("ा") and best.endswith("ā"):
-            best = best[:-1] + "a"             # silent he: afsāna, not afsānā
+        if urdu.rstrip("ٔ").endswith(("ہ", "ۂ")) and deva.endswith("ा") and best.endswith("ā"):
+            best = best[:-1] + "a"             # silent he: afsāna, jalva-e-gul (جلوۂ گل)
         self._cache[key] = best
         return best
 

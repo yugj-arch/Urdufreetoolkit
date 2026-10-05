@@ -36,6 +36,10 @@ models/
 !/data/rekhta_model/
 /data/rekhta_model/*
 !/data/rekhta_model/model.pt
+# ...and Rekhta's spellings (urdu_nn/rekhta_lexicon.py), built by
+# `python -m training.rekhta.gold lexicon --split all --ship` from rekhta.org's
+# pages; the pages themselves (data/rekhta_gold/) stay local
+!/data/rekhta_lexicon.json.gz
 # resumability checkpoint/title-cache files: local working state, not shipped data.
 /data/.lexicon_checkpoint.json
 /data/.lexicon_titles.json

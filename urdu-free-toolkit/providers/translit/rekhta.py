@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """Rekhta-style transliteration as a provider (offline, free).
 
-Wraps ``rekhta_translit.py``: our line model, distilled from Rekhta Labs'
-published Urdu->Hindi poetry model, reads each misra-sized run of words in
-context (izafat, conjunctive و, poetic forms); Roman comes from the same
-reading in Rekhta's two schemes -- the ASCII table (``KHauf-e-rasan``,
-``aañkh``, ``pa.Dhaa.ii``) as the plain spelling and the diacritic one
-(``ḳhauf-e-rasan``, ``āñkh``) behind the ā toggle.
+Wraps ``rekhta_translit.py``: Rekhta Labs' published Urdu->Hindi poetry model
+and our line model read each misra-sized run of words in context (izafat,
+conjunctive و, poetic forms), a poem's lines are checked against its meter,
+and words are spelt as rekhta.org spells them. Roman comes in rekhta.org's
+two spellings, as its own Roman toggle has them -- the simple one
+(``dil-e-nadan tujhe hua kya hai``) as the plain spelling and the marked one
+(``dil-e-nādāñ tujhe huā kyā hai``) behind the ā toggle.
 """
 from __future__ import annotations
 
@@ -25,8 +26,8 @@ class RekhtaTranslit(BaseProvider):
         label="DotSyndicate Fine-tune (offline)",
         capability=Capability.TRANSLIT,
         kind="offline",
-        note="Line model distilled from Rekhta Labs' poetry transliterator. "
-             "Devanagari as Rekhta writes it; Roman in Rekhta's scheme (aa ii uu, KH G, T D, .D, ñ).",
+        note="Rekhta Labs' poetry transliterator, checked by meter and spelt as rekhta.org spells. "
+             "Devanagari as Rekhta writes it; Roman as rekhta.org prints it (simple, or marked: ā ī ū, ḳh ġh, ñ).",
         price="Free · offline",
     )
 

@@ -214,8 +214,9 @@ def api_corrections_get():
 
 @app.post("/api/corrections")
 def api_corrections_post():
-    """JSON `urdu`, `devanagari`, optional `roman` (Rekhta's ASCII table:
-    KHauf, pa.Dhaa.ii). Saved to data/rekhta_corrections.tsv; from then on the
+    """JSON `urdu`, `devanagari`, optional `roman` (rekhta.org's marked Roman,
+    ḳhauf / paḍhā.ī, or its ASCII table, KHauf / pa.Dhaa.ii). Saved to
+    data/rekhta_corrections.tsv; from then on the
     Rekhta-style engine uses it for that word, everywhere, over any model."""
     if config.settings_readonly():
         return jsonify({"saved": False, "readonly": True,
