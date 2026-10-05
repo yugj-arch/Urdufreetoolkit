@@ -204,6 +204,34 @@ def ain_respell(urdu: str, deva: str, rich: str) -> tuple[str, str]:
     return deva, rich
 
 
+# rekhta.org's simple Roman (its Roman toggle: dil-e-nadan tujhe hua kya hai),
+# from its marked Roman. Words it writes its own way:
+_SIMPLE_WORDS = {
+    "meñ": "mein", "maiñ": "main", "haiñ": "hain", "nahīñ": "nahin", "kahīñ": "kahin",
+    "hameñ": "hamein", "tumheñ": "tumhein", "unheñ": "unhen", "inheñ": "inhen", "jinheñ": "jinhen",
+    "kyuuñ": "kyun", "yuuñ": "yun", "huuñ": "hun", "ham": "hum", "vo": "wo", "tire": "tere",
+    "mire": "mere", "tirī": "teri", "mirī": "meri", "tirā": "tera", "mirā": "mera", "ik": "ek",
+    "kahūñ": "kahun", "jahāñ": "jahan", "yahāñ": "yahan", "vahāñ": "wahan",
+}
+
+
+def to_simple(word: str) -> str:
+    """One word of rekhta.org's marked Roman -> its simple Roman: marks off
+    (ā a, ḳh KH, ġh gh), ñ n (-eñ -en), v w, a word-initial ā kept long
+    (aankh, aate) and a doubled vowel kept (yaad, raat)."""
+    lw = word.lower()
+    if lw in _SIMPLE_WORDS:
+        return _SIMPLE_WORDS[lw]
+    s = word.replace("ḳh", "KH").replace("ġh", "gh").replace("ḍ", "D").replace("Ḍ", "D")
+    s = re.sub(r"(?<![\w'])ā", "aa", s)
+    s = s.replace("a.a", "a").replace(".", "")
+    s = s.replace("ii", "i").replace("uu", "u")
+    s = s.replace("ā", "a").replace("ī", "i").replace("ū", "u")
+    s = re.sub(r"eñ\b", "en", s)
+    s = re.sub(r"aiñ\b", "ain", s).replace("ñ", "n")
+    return re.sub(r"(?<![a-z])v|(?<=[aeiou-])v|(?<=n)v", "w", s)
+
+
 def undouble(roman: str) -> str:
     """rekhta.org writes no doubled vowel inside a compound (hāl-e-dil, not haal)."""
     return roman.replace("aa", "ā").replace("ii", "ī").replace("uu", "ū")

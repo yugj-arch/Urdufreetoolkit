@@ -168,14 +168,17 @@ def test_engine_end_to_end(teacher):
     from pathlib import Path
     eng = rekhta_translit.RekhtaTransliterator(use_teacher=True, lexicon_path=Path("-none-"))
     r = eng.transliterate_full("دل ہی تو ہے نہ سنگ و خشت، درد سے بھر نہ آئے کیوں؟\nوہ 1947ء میں آئے۔")
-    deva, ascii_, dia = r["devanagari"].split("\n"), r["roman"].split("\n"), r["roman_diacritic"].split("\n")
+    deva, ascii_, dia = r["devanagari"].split("\n"), r["ascii"].split("\n"), r["roman_diacritic"].split("\n")
+    simple = r["roman"].split("\n")
     assert deva[0] == "दिल ही तो है न संग-ओ-ख़िश्त, दर्द से भर न आए क्यूँ?"
     assert ascii_[0] == "dil hii to hai na sang-o-KHisht, dard se bhar na aa.e kyuuñ?"
     # rekhta.org: "dil hī to hai na sang-o-ḳhisht dard se bhar na aa.e kyuuñ" -- by
     # rule संग is sañg (Rekhta's spelling 35 times in 51); its lexicon knows this one
     assert dia[0] == "dil hī to hai na sañg-o-ḳhisht, dard se bhar na aa.e kyuuñ?"
+    # and its simple Roman: "dil hi to hai na sang-o-KHisht dard se bhar na aae kyun"
+    assert simple[0] == "dil hi to hai na sang-o-KHisht, dard se bhar na aae kyun?"
     assert deva[1].startswith("वो 1947 में") and deva[1].endswith("।")     # में, not मैं
-    assert ascii_[1].endswith(".")
+    assert ascii_[1].endswith(".") and simple[1].startswith("wo 1947 mein")
 
 
 def _gold_row():
@@ -210,7 +213,7 @@ def test_engine_uses_rekhtas_spelling(teacher, tmp_path):
     eng = rt.RekhtaTransliterator(mode="teacher", lexicon_path=p, corrections_path=tmp_path / "none")
     r = eng.transliterate_full("دل ہی تو ہے نہ سنگ و خشت")
     assert "sang-o-ḳhisht" in r["roman_diacritic"]
-    assert "sang-o-KHisht" in r["roman"]
+    assert "sang-o-KHisht" in r["ascii"] and "sang-o-KHisht" in r["roman"]
 
 
 def test_provider_is_registered():
@@ -252,4 +255,21 @@ def test_engine_applies_a_correction_over_the_model(teacher, tmp_path):
     eng = rt.RekhtaTransliterator(mode="teacher", corrections_path=p, lexicon_path=tmp_path / "none")
     r = eng.transliterate_full("وسوسے دل میں نہ رکھ خوف رسن لے کے نہ چل")
     assert "ख़ौफ़-ए-रसन्न" in r["devanagari"]
-    assert "KHauf-e-rasann" in r["roman"]
+    assert "KHauf-e-rasann" in r["ascii"]
+
+
+def test_pen_name_is_quoted_as_rekhta_prints_it(teacher, tmp_path):
+    import rekhta_translit as rt
+    eng = rt.RekhtaTransliterator(mode="teacher", lexicon_path=tmp_path / "none",
+                                  corrections_path=tmp_path / "none")
+    r = eng.transliterate_full("دل کے خوش رکھنے کو غالبؔ یہ خیال اچھا ہے")
+    assert "'ग़ालिब'" in r["devanagari"]
+    assert "'ġhālib'" in r["roman_diacritic"] and "'ghalib'" in r["roman"]
+
+
+def test_simple_roman_is_rekhtas_toggle():
+    from urdu_nn.rekhta_lexicon import RekhtaLexicon
+    lex = RekhtaLexicon(simple={"yaad": "yaad", "haath": "hath"})
+    assert lex.to_simple("dil-e-nādāñ tujhe huā kyā hai") == "dil-e-nadan tujhe hua kya hai"
+    assert lex.to_simple("āḳhir meñ ġham haiñ vo yaad haath") == "aaKHir mein gham hain wo yaad hath"
+    assert lex.to_simple("'ġhālib' ma.alūm") == "'ghalib' malum"

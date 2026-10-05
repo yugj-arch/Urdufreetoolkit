@@ -48,21 +48,26 @@ def deva_fold(deva: str, izafat: bool = True) -> str:
     d = re.sub(r"[\s\-'़]", "", unicodedata.normalize("NFD", d))
     d = d.replace("ँ", "ं")
     d = re.sub(r"[ङञणनम]्(?=[क-ह])", "ं", d)
+    d = re.sub(r"(^|्)यों", r"\1यूं", d)      # کیوں, یوں: kyoñ / kyūñ are one word said two ways
     return unicodedata.normalize("NFC", d)
 
 
 def clean(word: str) -> str:
-    """A word as printed on the page, punctuation and takhallus quotes off."""
+    """A word as printed on the page, punctuation and takhallus quotes off
+    ('ग़ालिब', ग़ुबार-ए-'मीर', 'मीर'-जी); an ain apostrophe inside a word
+    (मा'लूम) stays."""
     w = unicodedata.normalize("NFC", word.replace("’", "'").replace("‘", "'")).strip()
     w = _EDGE.sub("", w)
-    return w.strip("'") if w.count("'") and (w.startswith("'") or w.endswith("'")) else w
+    return "-".join(p.strip("'") for p in w.split("-"))
 
 
 class RekhtaLexicon:
-    """urdu phrase key -> [(devanagari, roman, count)], most frequent first."""
+    """urdu phrase key -> [(devanagari, roman, count)], most frequent first;
+    and ``simple``: Rekhta's marked Roman word -> its simple Roman."""
 
-    def __init__(self, entries: dict[str, list] | None = None):
+    def __init__(self, entries: dict[str, list] | None = None, simple: dict[str, str] | None = None):
         self.entries = {k: [tuple(e) for e in v] for k, v in (entries or {}).items()}
+        self.simple = dict(simple or {})
         self.max_phrase = max((k.count(" ") + 1 for k in self.entries), default=1)
 
     def __len__(self) -> int:
@@ -83,18 +88,35 @@ class RekhtaLexicon:
                 if ur and hi and ro and ur.count(" ") < MAX_PHRASE:
                     yield ur, hi, ro
 
+    @staticmethod
+    def simple_pairs(row: dict):
+        """(marked, simple) Roman for every word of a gold ghazal whose two
+        Roman lines have the same words."""
+        for a, b in zip(row.get("roman", []), row.get("simple", [])):
+            wa, wb = a.split(), b.split()
+            if len(wa) == len(wb):
+                for x, y in zip(wa, wb):
+                    x, y = clean(x).lower(), clean(y)
+                    if x and y:
+                        yield x, y
+
     @classmethod
     def build(cls, rows: list[dict]) -> "RekhtaLexicon":
         c: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+        s: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
         for row in rows:
             for ur, hi, ro in cls.units_of(row):
                 c[ur][(hi, ro)] += 1
-        return cls({k: [(h, r, n) for (h, r), n in v.most_common()] for k, v in c.items()})
+            for x, y in cls.simple_pairs(row):
+                s[x][y] += 1
+        return cls({k: [(h, r, n) for (h, r), n in v.most_common()] for k, v in c.items()},
+                   {k: v.most_common(1)[0][0] for k, v in s.items()})
 
     def save(self, path: Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = json.dumps(self.entries, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        data = json.dumps({"entries": self.entries, "simple": self.simple},
+                          ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         path.write_bytes(gzip.compress(data) if path.suffix == ".gz" else data)
 
     @classmethod
@@ -104,7 +126,28 @@ class RekhtaLexicon:
         raw = Path(path).read_bytes()
         if str(path).endswith(".gz"):
             raw = gzip.decompress(raw)
-        return cls(json.loads(raw.decode("utf-8")))
+        data = json.loads(raw.decode("utf-8"))
+        if "entries" in data and isinstance(data["entries"], dict):
+            return cls(data["entries"], data.get("simple"))
+        return cls(data)
+
+    def to_simple(self, marked: str) -> str:
+        """Rekhta's simple Roman for a run of its marked Roman: each word as
+        Rekhta wrote it where known, else by rule."""
+        from urdu_nn.rekhta_roman import to_simple
+        out = []
+        for w in re.split(r"(\s+)", marked):
+            if not w or w.isspace():
+                out.append(w)
+                continue
+            m = re.match(r"^(\W*)(.*?)(\W*)$", w)
+            head, core, tail = m.groups()
+            key = core.lower()
+            if key in self.simple:
+                out.append(head + self.simple[key] + tail)
+            else:
+                out.append(head + "-".join(to_simple(p) for p in core.split("-")) + tail)
+        return "".join(out)
 
     # -- use --------------------------------------------------------------------
 
@@ -136,16 +179,6 @@ class RekhtaLexicon:
                 if p in v:
                     v[p] += 0.5
         return votes[0].most_common(1)[0][0], votes[1].most_common(1)[0][0]
-
-    def confident(self, key: str, min_count: int) -> tuple[str, str] | None:
-        """Rekhta's reading of ``key`` when it has only ever read it one way,
-        at least ``min_count`` times -- whatever the engine read."""
-        cands = self.entries.get(key)
-        if not cands or sum(n for *_, n in cands) < min_count:
-            return None
-        if len({deva_fold(h) for h, *_ in cands}) != 1:
-            return None
-        return self.lookup(key, cands[0][0])
 
 
 # ---------------------------------------------------------------------------

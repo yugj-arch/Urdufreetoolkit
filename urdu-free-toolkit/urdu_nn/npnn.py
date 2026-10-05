@@ -372,6 +372,28 @@ class Checkpoint:
         self.meta = {k: v for k, v in ck.items() if k != "state"}
         self.vocab = Vocab.from_itos(ck["itos"])
 
+    def logprob(self, srcs: list[list[int]], tgts: list[list[int]]) -> list[float]:
+        """Mean per-token log P(target | source); targets carry BOS ... EOS."""
+        out: list[float] = []
+        for b in range(0, len(srcs), 64):
+            s, t = srcs[b:b + 64], tgts[b:b + 64]
+            if self.torch:
+                import torch
+                from urdu_nn.model import pad_batch as torch_pad
+                with torch.inference_mode():
+                    tt = torch_pad(t, self.device)
+                    logits = self.model(torch_pad(s, self.device), tt[:, :-1]).float()
+                    logp = torch.log_softmax(logits, -1).cpu().numpy()
+                    gold = tt[:, 1:].cpu().numpy()
+            else:
+                tt = pad_batch(t)
+                logp = log_softmax(self.model.decode(tt[:, :-1], self.model.start(pad_batch(s))))
+                gold = tt[:, 1:]
+            tok = np.where(gold == PAD, 0, np.take_along_axis(logp, gold[..., None], -1)[..., 0])
+            lens = np.maximum((gold != PAD).sum(1), 1)
+            out += [float(x) for x in tok.sum(1) / lens]
+        return out
+
     def beam_search(self, seqs: list[list[int]], beam: int, max_len: int):
         if not self.torch:
             return beam_search(self.model, seqs, beam=beam, max_len=max_len)

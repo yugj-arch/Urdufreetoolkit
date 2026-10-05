@@ -13,6 +13,7 @@ page a second) and resumes where it stopped.
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import html
 import json
@@ -36,7 +37,25 @@ POETS = [
     # modern
     "faiz-ahmad-faiz", "ahmad-faraz", "jaun-eliya", "parveen-shakir", "nasir-kazmi",
     "bashir-badr", "nida-fazli", "firaq-gorakhpuri", "jigar-moradabadi",
+    # more of both (a slug that isn't Rekhta's is skipped)
+    "khwaja-mir-dard", "nazeer-akbarabadi", "mushafi-ghulam-hamdani", "insha-allah-khan-insha",
+    "imam-bakhsh-nasikh", "mirza-mohammad-rafi-sauda", "wali-mohammad-wali", "qaim-chandpuri",
+    "shad-azimabadi", "yagana-changezi", "asghar-gondvi", "josh-malihabadi", "asrar-ul-haq-majaz",
+    "makhdoom-mohiuddin", "majrooh-sultanpuri", "sahir-ludhianvi", "kaifi-azmi", "ali-sardar-jafri",
+    "jan-nisar-akhtar", "akhtar-ul-iman", "ibn-e-insha", "munir-niyazi", "zafar-iqbal",
+    "shakeb-jalali", "mohsin-naqvi", "obaidullah-aleem", "jamal-ehsani", "irfan-siddiqi",
+    "ahmad-mushtaq", "khalilur-rahman-azmi", "shahryar", "javed-akhtar", "gulzar", "rahat-indori",
+    "munawwar-rana", "waseem-barelvi", "ada-jafri", "zehra-nigah", "kishwar-naheed",
+    "aziz-lakhnavi", "arzoo-lakhnavi", "seemab-akbarabadi", "jaleel-manikpuri", "riyaz-khairabadi",
+    "saqib-lakhnavi", "anwar-shuoor", "abbas-tabish", "tehzeeb-hafi", "ahmad-nadeem-qasmi",
+    "qateel-shifai", "habib-jalib", "ehsan-danish", "hafeez-jalandhari", "akhtar-shirani",
+    "krishn-bihari-noor", "bekhud-dehlvi", "jurat-qalandar-bakhsh", "mustafa-zaidi",
+    "ahmad-faraz", "athar-nafees", "khumar-barabankavi", "shakeel-badayuni", "hasrat-jaipuri",
+    "kaleem-aajiz", "nazir-banarasi", "nushur-wahidi", "aal-e-ahmad-suroor", "rais-amrohvi",
+    "jigar-moradabadi", "akbar-allahabadi", "mohammad-alvi", "nasir-kazmi", "shuja-khawar",
+    "ghulam-mohammad-qasir", "saleem-kausar", "ameer-qazalbash", "iftikhar-arif", "pirzada-qasim",
 ]
+POETS = list(dict.fromkeys(POETS))
 
 
 def _get(url: str) -> str:
@@ -100,47 +119,63 @@ def load(split: str | None = None) -> list[dict]:
     return [r for r in rows if split in (None, r["split"])]
 
 
-def fetch(per_poet: int, delay: float) -> None:
-    GOLD.mkdir(parents=True, exist_ok=True)
-    done = {r["slug"] for r in load()}
-    with GHAZALS.open("a", encoding="utf-8") as fh:
-        for poet in POETS:
-            try:
-                listing = _get(f"{SITE}/poets/{poet}/ghazals")
-            except Exception as e:
-                print(f"{poet}: listing failed ({e})", flush=True)
-                continue
-            slugs = list(dict.fromkeys(re.findall(r'href="https://www\.rekhta\.org/ghazals/([a-z0-9-]+)"',
-                                                   listing)))
+def _ghazal(slug: str, poet: str, delay: float) -> dict | None:
+    pages = {}
+    try:
+        for lang in ("ur", "hi", "en"):
+            pages[lang] = poem_lines(_get(f"{SITE}/ghazals/{slug}?lang={lang}"))
             time.sleep(delay)
-            got = sum(1 for s in slugs if s in done)
-            for slug in slugs:
-                if got >= per_poet:
-                    break
-                if slug in done:
-                    continue
-                pages = {}
-                try:
-                    for lang in ("ur", "hi", "en"):
-                        pages[lang] = poem_lines(_get(f"{SITE}/ghazals/{slug}?lang={lang}"))
-                        time.sleep(delay)
-                except Exception as e:
-                    print(f"  {slug}: {e}", flush=True)
-                    continue
-                ur, hi = pages["ur"].get("off", []), pages["hi"].get("off", [])
-                ro, simple = pages["en"].get("off", []), pages["en"].get("on", [])
-                if not ur or not (len(ur) == len(hi) == len(ro)):
-                    print(f"  {slug}: lines don't line up {len(ur)}/{len(hi)}/{len(ro)}", flush=True)
-                    continue
-                row = {"slug": slug, "poet": poet, "split": split_of(slug), "ur": ur, "hi": hi,
-                       "roman": ro, "simple": simple if len(simple) == len(ur) else [],
-                       "units": {k: pages[lang].get("units", []) for k, lang in
-                                 (("ur", "ur"), ("hi", "hi"), ("roman", "en"))}}
-                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-                fh.flush()
-                done.add(slug)
-                got += 1
-            print(f"{poet}: {got}", flush=True)
+    except Exception as e:
+        print(f"  {slug}: {e}", flush=True)
+        return None
+    ur, hi = pages["ur"].get("off", []), pages["hi"].get("off", [])
+    ro, simple = pages["en"].get("off", []), pages["en"].get("on", [])
+    if not ur or not (len(ur) == len(hi) == len(ro)):
+        print(f"  {slug}: lines don't line up {len(ur)}/{len(hi)}/{len(ro)}", flush=True)
+        return None
+    return {"slug": slug, "poet": poet, "split": split_of(slug), "ur": ur, "hi": hi,
+            "roman": ro, "simple": simple if len(simple) == len(ur) else [],
+            "units": {k: pages[lang].get("units", []) for k, lang in
+                      (("ur", "ur"), ("hi", "hi"), ("roman", "en"))}}
+
+
+def fetch(per_poet: int, delay: float, workers: int = 1) -> None:
+    """Up to ``per_poet`` ghazals of each poet (the first page of their
+    list), ``workers`` pages in flight at a time, each worker pausing
+    ``delay`` seconds between pages."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    GOLD.mkdir(parents=True, exist_ok=True)
+    done = collections.Counter()
+    seen = set()
+    for r in load():
+        seen.add(r["slug"])
+        done[r["poet"]] += 1
+    todo = []
+    for poet in POETS:
+        if done[poet] >= per_poet:
+            continue
+        try:
+            listing = _get(f"{SITE}/poets/{poet}/ghazals")
+        except Exception as e:
+            print(f"{poet}: listing failed ({e})", flush=True)
+            continue
+        time.sleep(delay)
+        slugs = [s for s in dict.fromkeys(re.findall(
+            r'href="https://www\.rekhta\.org/ghazals/([a-z0-9-]+)"', listing)) if s not in seen]
+        seen.update(slugs)
+        todo += [(s, poet) for s in slugs[:per_poet - done[poet]]]
+        print(f"{poet}: {min(len(slugs), per_poet - done[poet])} to fetch", flush=True)
+    print(f"{len(todo)} ghazals to fetch", flush=True)
+    lock = threading.Lock()
+    with GHAZALS.open("a", encoding="utf-8") as fh, ThreadPoolExecutor(workers) as pool:
+        for n, row in enumerate(pool.map(lambda t: _ghazal(t[0], t[1], delay), todo), 1):
+            if row:
+                with lock:
+                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    fh.flush()
+            if n % 50 == 0:
+                print(f"{n}/{len(todo)}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -179,13 +214,15 @@ def score(rows: list[dict], engine, label: str = "", dump: Path | None = None) -
     """Run ``engine`` (text -> {devanagari, roman_diacritic, roman, plain})
     on every ghazal and compare with what Rekhta published."""
     import collections
-    keys = (("hi", "devanagari", False), ("roman", "roman_diacritic", True))
+    keys = (("hi", "devanagari", False), ("roman", "roman_diacritic", True), ("simple", "roman", True))
     tot = {k: [0, 0, 0, 0] for k, _, _ in keys}      # lines ok, lines, words ok, words
     diffs = {k: collections.Counter() for k, _, _ in keys}
     examples = []
     for r in rows:
         out = engine("\n".join(r["ur"]))
         for k, ok_key, roman in keys:
+            if not r.get(k) or ok_key not in out:
+                continue
             ours = out[ok_key].split("\n")
             for i, want_line in enumerate(r[k]):
                 got = tokens(ours[i] if i < len(ours) else "", roman)
@@ -216,6 +253,54 @@ def score(rows: list[dict], engine, label: str = "", dump: Path | None = None) -
     return res
 
 
+# ---------------------------------------------------------------------------
+# fine-tuning data: rekhta.org's own Devanagari for the line model
+# ---------------------------------------------------------------------------
+
+def site_pairs(row: dict) -> list[tuple[str, str]]:
+    """(urdu run, Rekhta's Devanagari for it) for every line of a ghazal
+    that is one model run: punctuation and the takhallus quotes off (the
+    engine adds those around the model), the ain apostrophe kept."""
+    from urdu_nn.rekhta_lexicon import clean
+    from urdu_nn.rekhta_text import segments
+    out = []
+    for ur, hi in zip(row["ur"], row["hi"]):
+        runs = [t for k, t in segments(ur) if k == "u"]
+        if len(runs) != 1:
+            continue
+        toks = [clean(t) for t in tokens(hi)]
+        target = " ".join(t for t in toks if t)
+        if target and not re.search(r"[A-Za-z0-9]", target):
+            out.append((runs[0], target))
+    return out
+
+
+def build_trainset(out_dir: Path, old_ratio: float, seed: int = 13) -> None:
+    """``data/rekhta_ds/site/{train,dev}.tsv``: the gold dev ghazals' lines
+    (a tenth of the ghazals held out as the fine-tune's own dev set), mixed
+    with ``old_ratio`` times as many of the student's distilled lines so it
+    keeps reading prose. The gold test ghazals are never used."""
+    import random
+    from urdu_nn.npnn import Checkpoint
+    rng = random.Random(seed)
+    vocab = set(Checkpoint(ROOT / "data" / "rekhta_model" / "model.pt").vocab.itos)
+    train, dev = [], []
+    for r in load("dev"):
+        pairs = [p for p in site_pairs(r) if set(p[0]) <= vocab and set(p[1]) <= vocab]
+        (dev if int(hashlib.md5(("ft" + r["slug"]).encode()).hexdigest()[:8], 16) % 10 == 0
+         else train).extend(pairs)
+    old = (ROOT / "data" / "rekhta_ds" / "v3" / "train.tsv").read_text(encoding="utf-8").splitlines()
+    old = [l for l in old if l.endswith("\t1")]
+    rng.shuffle(old)
+    old = old[:int(len(train) * old_ratio)]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "train.tsv").write_text(
+        "\n".join([f"site\t{u}\t{h}\t1\t1" for u, h in train] + old) + "\n", encoding="utf-8")
+    (out_dir / "dev.tsv").write_text("\n".join(f"site\t{u}\t{h}\t1\t1" for u, h in dev) + "\n",
+                                     encoding="utf-8")
+    print(f"site lines: train {len(train)} dev {len(dev)}; old lines {len(old)} -> {out_dir}", flush=True)
+
+
 def engine_fn(mode: str = None, lexicon_path=None):
     import rekhta_translit
     eng = rekhta_translit.RekhtaTransliterator(lexicon_path=lexicon_path,
@@ -234,18 +319,23 @@ def build_lexicon(split: str, path: Path) -> Path:
 def main(argv=None) -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["fetch", "stats", "score", "lexicon"])
+    ap.add_argument("cmd", choices=["fetch", "stats", "score", "lexicon", "trainset"])
+    ap.add_argument("--old-ratio", type=float, default=1.0)
     ap.add_argument("--per-poet", type=int, default=8)
     ap.add_argument("--delay", type=float, default=1.0)
+    ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--split", default="dev", help="ghazals to score: dev, test or all")
     ap.add_argument("--lex", default="none",
                     help="lexicon for scoring: none, or the split to build it from (dev/all)")
     ap.add_argument("--mode", default=None, help="engine mode (ensemble/student/teacher)")
     a = ap.parse_args(argv)
     if a.cmd == "fetch":
-        fetch(a.per_poet, a.delay)
+        fetch(a.per_poet, a.delay, a.workers)
     if a.cmd == "lexicon":
         build_lexicon(a.split, GOLD / "lexicon.json.gz")
+        return 0
+    if a.cmd == "trainset":
+        build_trainset(ROOT / "data" / "rekhta_ds" / "site", a.old_ratio)
         return 0
     if a.cmd == "score":
         lex = Path("-none-") if a.lex == "none" else build_lexicon(a.lex, GOLD / f"lexicon_{a.lex}.json.gz")

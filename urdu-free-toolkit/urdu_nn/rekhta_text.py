@@ -91,5 +91,21 @@ def segments(line: str) -> list[tuple[str, str]]:
     return out
 
 
+TAKHALLUS = "ؔ"     # ؔ over a poet's pen name (غالبؔ): Rekhta prints it 'ग़ालिब' / 'ġhālib'
+
+
+def takhallus_marks(line: str) -> list[bool]:
+    """One flag per Urdu word ``segments`` will give for ``line``, in
+    order: does the word carry the takhallus sign?"""
+    line = unicodedata.normalize("NFC", line)
+    out = []
+    for m in _WORD_RE.finditer(line):
+        w = norm_word(m.group())
+        if w and w != "ء":
+            tail = re.match("[ؐ-ؚ]*", line[m.end():]).group()
+            out.append(TAKHALLUS in tail)
+    return out
+
+
 def urdu_runs(line: str) -> list[str]:
     return [t for k, t in segments(line) if k == "u"]
