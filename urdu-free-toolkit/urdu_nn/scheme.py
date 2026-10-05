@@ -57,6 +57,7 @@ _URDU_FOLDS = {
     "إ": "ا",   # alif hamza below -> alif
     "ٱ": "ا",   # alif wasla -> alif
     "ۀ": "ۂ",   # heh with yeh above -> heh goal with hamza
+    "ٴ": "ٔ",   # high hamza (جلوہٴ) -> hamza above, which NFC joins into ۂ
     "ـ": "",         # kashida
     "‌": "",         # ZWNJ
     "‍": "",         # ZWJ

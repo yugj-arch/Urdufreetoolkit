@@ -19,7 +19,7 @@ MAX_RUN = 45            # chars per model input: Rekhta's teacher was trained on
                         # (99% of ghazal lines are <= 50 chars) and loops on longer input
 _HONORIFIC = re.compile("[ؐ-ؚ]")       # ؐ ؑ ؒ ؓ ...: marks after holy names, not read
 # Arabic letter variants, kashida and joiners fold away inside norm_urdu
-_VARIANTS = set("يىكهەةأإٱۀـ‌‍")
+_VARIANTS = set("يىكهەةأإٱۀٴـ‌‍")
 _WORD_CH = URDU_LETTERS | HARAKAT | {KHARI_ZABAR, HAMZA_ABOVE} | _VARIANTS
 _WORD_RE = re.compile("[" + re.escape("".join(sorted(_WORD_CH))) + "]+")
 
