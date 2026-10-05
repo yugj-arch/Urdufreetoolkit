@@ -29,14 +29,15 @@ load_dotenv(settings.env_path())
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.max_content_length()
 
-DEFAULT_TRANSLIT_PROVIDER = "neural"
+DEFAULT_TRANSLIT_PROVIDER = "rekhta"
 
 
 def _translit_provider_ids(requested) -> list[str]:
-    """Use the neural hybrid by default, with an available-provider fallback.
+    """Use the Rekhta-style engine (DotSyndicate Fine-tune) by default, with an
+    available-provider fallback.
 
     Explicit selections are always respected.  The fallback keeps development
-    installs and tests useful when the shipped neural assets are absent.
+    installs and tests useful when the shipped model assets are absent.
     """
     if requested:
         return list(requested)
