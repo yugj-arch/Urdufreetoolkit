@@ -67,7 +67,60 @@ def batches(rows, vocab, bs, device, shuffle=True):
         src = pad_batch([encode_src(vocab, r[1]) for r in ch], device)
         tgt = pad_batch([vocab.encode_tgt(r[2]) for r in ch], device)
         w = torch.tensor([r[3] for r in ch], device=device)
-        yield src, tgt, w
+        yield src, tgt, w, ch
+
+
+class SoftTargets:
+    """Rekhta's teacher, teacher-forced on the student's target, as a full
+    next-character distribution over the *student's* vocabulary (word-level
+    knowledge distillation: the student learns which other spellings the
+    teacher considered, not just its greedy pick).
+
+    The teacher's Devanagari pieces are single characters with a leading
+    ``▁`` per word, so its position k+1 predicts what the student predicts
+    at position k (``▁`` = space, its EOS = ours). Mass on pieces we have
+    no character for is dropped; rows with a character the teacher has no
+    piece for (or a gold-dictionary target it never produced) get no soft
+    targets."""
+
+    def __init__(self, vocab: Vocab, device):
+        from urdu_nn.rekhta_models import BOS as T_BOS, EOS as T_EOS
+        from urdu_nn.rekhta_teacher import Teacher
+        from urdu_nn.model import EOS
+        self.t = Teacher("ur2hi", device=str(device))
+        for p in self.t.model.parameters():
+            p.requires_grad_(False)
+        sp = self.t.tgt_sp
+        n_t = sp.get_piece_size()
+        t2s = torch.full((n_t,), -1, dtype=torch.long)
+        s2t = torch.full((len(vocab),), -1, dtype=torch.long)
+        for i in range(4, n_t):
+            c = " " if sp.id_to_piece(i) == "▁" else sp.id_to_piece(i)
+            if c in vocab.stoi:
+                t2s[i] = vocab.stoi[c]
+                s2t[vocab.stoi[c]] = i
+        t2s[T_EOS], s2t[EOS], s2t[PAD] = EOS, T_EOS, PAD
+        self.t2s, self.s2t = t2s.to(device), s2t.to(device)
+        self.space_t, self.bos_t = sp.piece_to_id("▁"), T_BOS
+        self.n_s = len(vocab)
+
+    @torch.no_grad()
+    def __call__(self, rows, tgt):
+        """(B, L, V_student) probabilities for ``tgt[:, 1:]`` and a (B,) mask
+        of the rows they are valid for."""
+        src = self.t._src([r[1] for r in rows])
+        body = self.s2t[tgt[:, 1:-1]]
+        ok = (body >= 0).all(1) & torch.tensor([r[0] != "gold" for r in rows], device=tgt.device)
+        B = tgt.size(0)
+        t_in = torch.cat([torch.full((B, 1), self.bos_t, device=tgt.device),
+                          torch.full((B, 1), self.space_t, device=tgt.device),
+                          body.clamp(min=1)], 1)
+        t_in[:, 2:] = t_in[:, 2:].masked_fill(tgt[:, 1:-1] == PAD, PAD)
+        p_t = torch.softmax(self.t.model.score(src, t_in).float()[:, 1:], -1)
+        keep = self.t2s >= 0
+        p = torch.zeros(B, p_t.size(1), self.n_s, device=tgt.device)
+        p.index_add_(2, self.t2s[keep], p_t[..., keep])
+        return p / p.sum(-1, keepdim=True).clamp(min=1e-9), ok
 
 
 @torch.no_grad()
@@ -108,6 +161,8 @@ def main(argv=None):
     ap.add_argument("--init", type=Path, default=None,
                     help="continue from this checkpoint (its size and vocabulary win)")
     ap.add_argument("--data", type=Path, default=None, help="dataset dir (default data/rekhta_ds)")
+    ap.add_argument("--kd", type=float, default=0.0,
+                    help="weight of the teacher's soft targets (0 = hard labels only)")
     args = ap.parse_args(argv)
     if args.data:
         global DS
@@ -150,6 +205,7 @@ def main(argv=None):
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1.0, (s + 1) / warm) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / total))))
     use_amp = device == "cuda"
+    soft = SoftTargets(vocab, device) if args.kd > 0 else None
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
     best, step, t0 = -1.0, 0, time.time()
@@ -157,7 +213,7 @@ def main(argv=None):
     for ep in range(1, args.epochs + 1):
         model.train()
         tot, n = 0.0, 0
-        for src, tgt, w in batches(train, vocab, args.bs, device):
+        for src, tgt, w, rows in batches(train, vocab, args.bs, device):
             try:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
                     logits = model(src, tgt[:, :-1])
@@ -166,6 +222,11 @@ def main(argv=None):
                                            gold.reshape(-1), ignore_index=PAD,
                                            label_smoothing=args.label_smoothing,
                                            reduction="none").view(gold.shape)
+                if soft is not None:
+                    p_t, ok = soft(rows, tgt)
+                    kd = -(p_t * torch.log_softmax(logits.float(), -1)).sum(-1)
+                    a = args.kd * ok.float()[:, None]
+                    loss_tok = ((1 - a) * loss_tok + a * kd).masked_fill(gold == PAD, 0.0)
                 ntok = (gold != PAD).sum(1).clamp(min=1)
                 loss = ((loss_tok.sum(1) / ntok) * w).sum() / w.sum()
                 opt.zero_grad(set_to_none=True)

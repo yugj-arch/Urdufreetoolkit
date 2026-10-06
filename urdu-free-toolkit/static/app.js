@@ -541,6 +541,7 @@ function wireWordPop() {
   $("#wp-fix-open").addEventListener("click", (e) => {
     e.stopPropagation();
     const f = state.popForms || {};
+    $("#wp-fix-ur").value = f.ur || "";
     $("#wp-fix-hi").value = f.hi && f.hi !== "—" ? f.hi : "";
     $("#wp-fix-ro").value = f.ro && f.ro !== "—" ? f.ro : "";
     $("#wp-fix-msg").hidden = true;
@@ -557,7 +558,16 @@ async function saveWordFix(e) {
   e.preventDefault();
   const f = state.popForms || {};
   const hi = $("#wp-fix-hi").value.trim(), ro = $("#wp-fix-ro").value.trim();
+  const ur = $("#wp-fix-ur").value.trim();
   const msg = $("#wp-fix-msg");
+  // Urdu spelling changed: fix it in the input text, then re-run
+  if (f.ur && ur && ur !== f.ur.trim()) {
+    const ta = $("#urdu-input");
+    ta.value = ta.value.split(f.ur.trim()).join(ur);
+    state.wordCache = {};
+    if (!hi) { closeWordPop(); runTranslit(); return; }
+    f.ur = ur;
+  }
   if (!f.ur || !hi) { msg.textContent = "Devanagari is required."; msg.hidden = false; return; }
   try {
     const res = await fetch("/api/corrections", {

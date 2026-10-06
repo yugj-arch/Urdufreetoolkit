@@ -251,6 +251,10 @@ textarea:focus, input[type="password"]:focus, input[type="text"]:focus {
 }
 .sher:last-child { margin-bottom: .4em; }
 .sher-body { overflow-x: auto; overflow-y: hidden; }
+/* RTL: the scroll box itself must be RTL, else the overflowing left side of an
+   Urdu misra sits at negative offset and can't be scrolled to */
+#ghazal[data-script="ur"] .sher-body { direction: rtl; -webkit-overflow-scrolling: touch; }
+#ghazal[data-script="ur"] .misra { width: max-content; min-width: 100%; }
 .misra {
   margin: 0; white-space: nowrap;
   font-family: var(--deva); color: var(--ink);
