@@ -24,6 +24,7 @@ import json
 import re
 import sys
 import unicodedata
+from pathlib import Path
 
 from urdu_nn.rekhta_roman import deva_units, reading_ok
 from urdu_nn.rekhta_text import ZER, norm_word
@@ -109,9 +110,11 @@ def gold_words() -> dict[str, str]:
     return {k: d for k, d in out.items() if k and " " not in k and len(deva_units(d)) == 1}
 
 
-def build(min_back: float = 0.85, word_repeat: int = 3) -> dict:
+def build(min_back: float = 0.85, word_repeat: int = 3, out_dir: Path | None = None) -> dict:
+    out_dir = out_dir or DS
+    out_dir.mkdir(parents=True, exist_ok=True)
     seen, stats = set(), collections.Counter()
-    out = {s: open(DS / f"{s}.tsv", "w", encoding="utf-8", newline="\n")
+    out = {s: open(out_dir / f"{s}.tsv", "w", encoding="utf-8", newline="\n")
            for s in ("train", "dev", "test")}
     gold = gold_words()
     teacher_word: dict[str, str] = {}
@@ -151,7 +154,7 @@ def build(min_back: float = 0.85, word_repeat: int = 3) -> dict:
     for fh in out.values():
         fh.close()
     rep = {f"{k[0]}:{k[1]}" if isinstance(k, tuple) else k: v for k, v in sorted(stats.items(), key=str)}
-    (DS / "dataset_stats.json").write_text(json.dumps(rep, indent=1), encoding="utf-8")
+    (out_dir / "dataset_stats.json").write_text(json.dumps(rep, indent=1), encoding="utf-8")
     return rep
 
 
@@ -159,8 +162,9 @@ def main(argv=None) -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-back", type=float, default=0.85)
+    ap.add_argument("--out", type=Path, default=None, help="output dir (default data/rekhta_ds)")
     a = ap.parse_args(argv)
-    print(json.dumps(build(a.min_back), indent=1))
+    print(json.dumps(build(a.min_back, out_dir=a.out), indent=1))
     return 0
 
 

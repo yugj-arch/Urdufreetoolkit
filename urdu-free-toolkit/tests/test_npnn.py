@@ -119,7 +119,7 @@ def test_engines_import_and_run_without_torch():
         "import rekhta_translit as rt\n"
         "eng = rt.RekhtaTransliterator(mode='student')\n"
         "d, r, _ = eng.transliterate('محبت')\n"
-        "assert d == 'मुहब्बत' and r == 'muhabbat', (d, r)\n"
+        "assert d == 'मोहब्बत' and r == 'mohabbat', (d, r)   # Rekhta's spelling\n"
         "import neural_translit as nt\n"
         "assert nt.NeuralTransliterator().has_model\n"
     )
